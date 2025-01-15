@@ -1,6 +1,6 @@
 defmodule Explorer.Validator.MetadataRetriever do
   @moduledoc """
-  Consults the configured smart contracts to fetch the valivators' metadata
+  Consults the configured smart contracts to fetch the validators' metadata
   """
 
   alias Explorer.SmartContract.Reader
@@ -15,22 +15,42 @@ defmodule Explorer.Validator.MetadataRetriever do
     end)
   end
 
-  defp fetch_validators_list do
-    # b7ab4db5 = keccak256(getValidators())
-    %{"b7ab4db5" => {:ok, [validators]}} =
-      Reader.query_contract(config(:validators_contract_address), contract_abi("validators.json"), %{
-        "b7ab4db5" => []
-      })
+  def fetch_validators_list do
+    validators_contract_address = config(:validators_contract_address)
 
-    validators
+    validators_contract_address_checked =
+      if is_nil(validators_contract_address) and Mix.env() == :test do
+        "0x0000000000000000000000000000000000006001"
+      else
+        validators_contract_address
+      end
+
+    # b7ab4db5 = keccak256(getValidators())
+    with false <- is_nil(validators_contract_address_checked),
+         %{"b7ab4db5" => {:ok, [validators]}} <-
+           Reader.query_contract(
+             validators_contract_address_checked,
+             contract_abi("validators.json"),
+             %{"b7ab4db5" => []},
+             false
+           ) do
+      validators
+    else
+      _ -> []
+    end
   end
 
   defp fetch_validator_metadata(validator_address) do
     # fa52c7d8 = keccak256(validators(address))
     %{"fa52c7d8" => {:ok, fields}} =
-      Reader.query_contract(config(:metadata_contract_address), contract_abi("metadata.json"), %{
-        "fa52c7d8" => [validator_address]
-      })
+      Reader.query_contract(
+        config(:metadata_contract_address),
+        contract_abi("metadata.json"),
+        %{
+          "fa52c7d8" => [validator_address]
+        },
+        false
+      )
 
     fields
   end
@@ -45,7 +65,7 @@ defmodule Explorer.Validator.MetadataRetriever do
          expiration_date,
          created_date,
          _updated_date,
-         _min_treshold
+         _min_threshold
        ]) do
     %{
       name: trim_null_bytes(first_name) <> " " <> trim_null_bytes(last_name),

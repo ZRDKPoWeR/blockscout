@@ -54,6 +54,7 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisor do
   @impl GenServer
   def init(named_arguments) do
     Logger.metadata(fetcher: :block_catchup)
+    Process.flag(:trap_exit, true)
 
     state = new(named_arguments)
 
@@ -180,7 +181,13 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisor do
   @impl GenServer
   def handle_info(:catchup_index, %__MODULE__{fetcher: %Catchup.Fetcher{} = catchup} = state) do
     {:noreply,
-     %__MODULE__{state | task: Task.Supervisor.async_nolink(Catchup.TaskSupervisor, Catchup.Fetcher, :task, [catchup])}}
+     %__MODULE__{
+       state
+       | task:
+           Task.Supervisor.async_nolink(Catchup.TaskSupervisor, Catchup.Fetcher, :task, [catchup],
+             shutdown: Application.get_env(:indexer, :graceful_shutdown_period)
+           )
+     }}
   end
 
   def handle_info(
@@ -263,8 +270,69 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisor do
   end
 
   def handle_info(
+        {ref, {:error, :etimedout}},
+        %__MODULE__{
+          task: %Task{ref: ref}
+        } = state
+      ) do
+    Logger.info("Index had to catch up, but the request is timing out, so retrying immediately.")
+
+    send(self(), :catchup_index)
+
+    {:noreply, %__MODULE__{state | task: nil}}
+  end
+
+  def handle_info(
+        {_ref1, {:error, :enetunreach}},
+        %__MODULE__{
+          task: _
+        } = state
+      ) do
+    Logger.info("Index had to catch up, but the request is timing out, so retrying immediately.")
+
+    send(self(), :catchup_index)
+
+    {:noreply, %__MODULE__{state | task: nil}}
+  end
+
+  def handle_info(
+        {_ref, {:error, :econnrefused}},
+        %__MODULE__{
+          fetcher: %Catchup.Fetcher{
+            block_fetcher: %Block.Fetcher{
+              json_rpc_named_arguments: [
+                transport: _,
+                transport_options: options,
+                variant: _
+              ]
+            }
+          },
+          task: _
+        } = state
+      ) do
+    Logger.error(fn ->
+      "Catchup index stream exited because the archive node endpoint at #{Keyword.get(options, :urls)} is unavailable. Restarting"
+    end)
+
+    send(self(), :catchup_index)
+
+    {:noreply, %__MODULE__{state | task: nil}}
+  end
+
+  def handle_info(
         {:DOWN, ref, :process, pid, reason},
         %__MODULE__{task: %Task{pid: pid, ref: ref}} = state
+      ) do
+    Logger.error(fn -> "Catchup index stream exited with reason (#{inspect(reason)}). Restarting" end)
+
+    send(self(), :catchup_index)
+
+    {:noreply, %__MODULE__{state | task: nil}}
+  end
+
+  def handle_info(
+        {:DOWN, _ref, :process, _pid, reason},
+        %__MODULE__{task: nil} = state
       ) do
     Logger.error(fn -> "Catchup index stream exited with reason (#{inspect(reason)}). Restarting" end)
 

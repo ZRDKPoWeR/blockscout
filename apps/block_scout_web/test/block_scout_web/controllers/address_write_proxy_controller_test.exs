@@ -4,8 +4,11 @@ defmodule BlockScoutWeb.AddressWriteProxyControllerTest do
 
   alias Explorer.ExchangeRates.Token
   alias Explorer.Chain.Address
+  alias Explorer.TestHelper
 
   import Mox
+
+  setup :verify_on_exit!
 
   describe "GET index/3" do
     setup :set_mox_global
@@ -49,9 +52,9 @@ defmodule BlockScoutWeb.AddressWriteProxyControllerTest do
         block_index: 0
       )
 
-      insert(:smart_contract, address_hash: contract_address.hash)
+      insert(:smart_contract, address_hash: contract_address.hash, contract_code_md5: "123")
 
-      get_eip1967_implementation()
+      TestHelper.get_eip1967_implementation_zero_addresses()
 
       conn =
         get(conn, address_write_proxy_path(BlockScoutWeb.Endpoint, :index, Address.checksum(contract_address.hash)))
@@ -80,20 +83,5 @@ defmodule BlockScoutWeb.AddressWriteProxyControllerTest do
 
       assert html_response(conn, 404)
     end
-  end
-
-  def get_eip1967_implementation do
-    expect(EthereumJSONRPC.Mox, :json_rpc, fn %{
-                                                id: 0,
-                                                method: "eth_getStorageAt",
-                                                params: [
-                                                  _,
-                                                  "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
-                                                  "latest"
-                                                ]
-                                              },
-                                              _options ->
-      {:ok, "0x0000000000000000000000000000000000000000000000000000000000000000"}
-    end)
   end
 end

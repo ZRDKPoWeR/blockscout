@@ -1,13 +1,15 @@
 # This file is responsible for configuring your application
-# and its dependencies with the aid of the Mix.Config module.
-use Mix.Config
+# and its dependencies with the aid of the Config module.
+import Config
 
 # By default, the umbrella project as well as each child
 # application will require this configuration file, ensuring
 # they all use the same configuration. While one could
 # configure all applications here, we prefer to delegate
 # back to each application for organization purposes.
-import_config "../apps/*/config/config.exs"
+for config <- "../apps/*/config/config.exs" |> Path.expand(__DIR__) |> Path.wildcard() do
+  import_config config
+end
 
 config :phoenix, :json_library, Jason
 
@@ -30,8 +32,22 @@ config :logger,
     {LoggerFileBackend, :indexer_token_balances},
     {LoggerFileBackend, :token_instances},
     {LoggerFileBackend, :reading_token_functions},
-    {LoggerFileBackend, :pending_transactions_to_refetch}
+    {LoggerFileBackend, :pending_transactions_to_refetch},
+    {LoggerFileBackend, :empty_blocks_to_refetch},
+    {LoggerFileBackend, :withdrawal},
+    {LoggerFileBackend, :api},
+    {LoggerFileBackend, :block_import_timings},
+    {LoggerFileBackend, :account},
+    {LoggerFileBackend, :api_v2},
+    LoggerJSON
   ]
+
+config :logger_json, :backend,
+  metadata:
+    ~w(application fetcher request_id first_block_number last_block_number missing_block_range_count missing_block_count
+  block_number step count error_count shrunk import_id transaction_id duration status unit endpoint method)a,
+  json_encoder: Jason,
+  formatter: LoggerJSON.Formatters.BasicLogger
 
 config :logger, :console,
   # Use same format for all loggers, even though the level should only ever be `:error` for `:error` backend
@@ -58,4 +74,4 @@ config :logger, :error,
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
-import_config "#{Mix.env()}.exs"
+import_config "#{config_env()}.exs"

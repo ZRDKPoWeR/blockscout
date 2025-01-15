@@ -21,8 +21,6 @@ defmodule EthereumJSONRPC.RollingWindow do
 
   use GenServer
 
-  require Logger
-
   def child_spec([init_arguments]) do
     child_spec([init_arguments, []])
   end
@@ -104,8 +102,6 @@ defmodule EthereumJSONRPC.RollingWindow do
 
   # Public for testing
   defp sweep(table, delete_match_spec, replace_match_spec) do
-    Logger.debug(fn -> "Sweeping windows" end)
-
     # Delete any rows where all windows empty
     :ets.match_delete(table, delete_match_spec)
 

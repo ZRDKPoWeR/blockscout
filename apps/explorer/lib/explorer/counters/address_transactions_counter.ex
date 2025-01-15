@@ -3,21 +3,15 @@ defmodule Explorer.Counters.AddressTransactionsCounter do
   Caches Address transactions counter.
   """
   use GenServer
+  use Utils.CompileTimeEnvHelper, enable_consolidation: [:explorer, [__MODULE__, :enable_consolidation]]
 
-  alias Explorer.Chain
+  alias Ecto.Changeset
+  alias Explorer.Chain.Address.Counters
+  alias Explorer.Counters.Helper
+  alias Explorer.Repo
 
   @cache_name :address_transactions_counter
   @last_update_key "last_update"
-
-  @ets_opts [
-    :set,
-    :named_table,
-    :public,
-    read_concurrency: true
-  ]
-
-  config = Application.get_env(:explorer, Explorer.Counters.AddressTransactionsCounter)
-  @enable_consolidation Keyword.get(config, :enable_consolidation)
 
   @spec start_link(term()) :: GenServer.on_start()
   def start_link(_) do
@@ -26,7 +20,7 @@ defmodule Explorer.Counters.AddressTransactionsCounter do
 
   @impl true
   def init(_args) do
-    create_cache_table()
+    Helper.create_cache_table(@cache_name)
 
     {:ok, %{consolidate?: enable_consolidation?()}, {:continue, :ok}}
   end
@@ -48,72 +42,44 @@ defmodule Explorer.Counters.AddressTransactionsCounter do
 
   def fetch(address) do
     if cache_expired?(address) do
-      Task.start_link(fn ->
-        update_cache(address)
-      end)
+      update_cache(address)
     end
 
-    address_hash_string = get_address_hash_string(address)
+    address_hash_string = to_string(address.hash)
     fetch_from_cache("hash_#{address_hash_string}")
   end
 
   def cache_name, do: @cache_name
 
   defp cache_expired?(address) do
-    cache_period = address_transactions_counter_cache_period()
-    address_hash_string = get_address_hash_string(address)
+    cache_period = Application.get_env(:explorer, __MODULE__)[:cache_period]
+    address_hash_string = to_string(address.hash)
     updated_at = fetch_from_cache("hash_#{address_hash_string}_#{@last_update_key}")
 
     cond do
       is_nil(updated_at) -> true
-      current_time() - updated_at > cache_period -> true
+      Helper.current_time() - updated_at > cache_period -> true
       true -> false
     end
   end
 
   defp update_cache(address) do
-    address_hash_string = get_address_hash_string(address)
-    put_into_cache("hash_#{address_hash_string}_#{@last_update_key}", current_time())
-    new_data = Chain.address_to_transaction_count(address)
-    put_into_cache("hash_#{address_hash_string}", new_data)
+    address_hash_string = to_string(address.hash)
+    Helper.put_into_ets_cache(@cache_name, "hash_#{address_hash_string}_#{@last_update_key}", Helper.current_time())
+    new_data = Counters.address_to_transaction_count(address)
+    Helper.put_into_ets_cache(@cache_name, "hash_#{address_hash_string}", new_data)
+    put_into_db(address, new_data)
   end
 
   defp fetch_from_cache(key) do
-    case :ets.lookup(@cache_name, key) do
-      [{_, value}] ->
-        value
-
-      [] ->
-        0
-    end
+    Helper.fetch_from_ets_cache(key, @cache_name)
   end
 
-  defp put_into_cache(key, value) do
-    :ets.insert(@cache_name, {key, value})
+  defp put_into_db(address, value) do
+    address
+    |> Changeset.change(%{transactions_count: value})
+    |> Repo.update()
   end
 
-  defp get_address_hash_string(address) do
-    Base.encode16(address.hash.bytes, case: :lower)
-  end
-
-  defp current_time do
-    utc_now = DateTime.utc_now()
-
-    DateTime.to_unix(utc_now, :millisecond)
-  end
-
-  def create_cache_table do
-    if :ets.whereis(@cache_name) == :undefined do
-      :ets.new(@cache_name, @ets_opts)
-    end
-  end
-
-  def enable_consolidation?, do: @enable_consolidation
-
-  defp address_transactions_counter_cache_period do
-    case Integer.parse(System.get_env("ADDRESS_TRANSACTIONS_COUNTER_CACHE_PERIOD", "")) do
-      {secs, ""} -> :timer.seconds(secs)
-      _ -> :timer.hours(1)
-    end
-  end
+  defp enable_consolidation?, do: @enable_consolidation
 end

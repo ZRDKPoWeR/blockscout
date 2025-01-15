@@ -1,44 +1,47 @@
 defmodule BlockScoutWeb.ChainController do
   use BlockScoutWeb, :controller
 
-  alias BlockScoutWeb.ChainView
+  import BlockScoutWeb.Chain, only: [paging_options: 1]
+
+  alias BlockScoutWeb.API.V2.Helper
+  alias BlockScoutWeb.{ChainView, Controller}
   alias Explorer.{Chain, PagingOptions, Repo}
+  alias Explorer.Chain.Address.Counters
   alias Explorer.Chain.{Address, Block, Transaction}
-  alias Explorer.Chain.Supply.{RSK, TokenBridge}
-  alias Explorer.Chain.Transaction.History.TransactionStats
+  alias Explorer.Chain.Cache.Block, as: BlockCache
+  alias Explorer.Chain.Cache.GasUsage
+  alias Explorer.Chain.Cache.Transaction, as: TransactionCache
+  alias Explorer.Chain.Search
+  alias Explorer.Chain.Supply.RSK
   alias Explorer.Counters.AverageBlockTime
-  alias Explorer.ExchangeRates.Token
   alias Explorer.Market
   alias Phoenix.View
 
   def show(conn, _params) do
-    transaction_estimated_count = Chain.transaction_estimated_count()
-    total_gas_usage = Chain.total_gas_usage()
-    block_count = Chain.block_estimated_count()
-    address_count = Chain.address_estimated_count()
+    transaction_estimated_count = TransactionCache.estimated_count()
+    total_gas_usage = GasUsage.total()
+    block_count = BlockCache.estimated_count()
+    address_count = Counters.address_estimated_count()
 
     market_cap_calculation =
       case Application.get_env(:explorer, :supply) do
         RSK ->
           RSK
 
-        TokenBridge ->
-          TokenBridge
-
         _ ->
           :standard
       end
 
-    exchange_rate = Market.get_exchange_rate(Explorer.coin()) || Token.null()
+    exchange_rate = Market.get_coin_exchange_rate()
 
-    transaction_stats = get_transaction_stats()
+    transaction_stats = Helper.get_transaction_stats()
 
     chart_data_paths = %{
       market: market_history_chart_path(conn, :show),
       transaction: transaction_history_chart_path(conn, :show)
     }
 
-    chart_config = Application.get_env(:block_scout_web, :chart_config, %{})
+    chart_config = Application.get_env(:block_scout_web, :chart)[:chart_config]
 
     render(
       conn,
@@ -59,58 +62,63 @@ defmodule BlockScoutWeb.ChainController do
     )
   end
 
-  def get_transaction_stats do
-    stats_scale = date_range(1)
-    transaction_stats = TransactionStats.by_date_range(stats_scale.earliest, stats_scale.latest)
-
-    # Need datapoint for legend if none currently available.
-    if Enum.empty?(transaction_stats) do
-      [%{number_of_transactions: 0, gas_used: 0}]
-    else
-      transaction_stats
-    end
-  end
-
-  def date_range(num_days) do
-    today = Date.utc_today()
-    latest = Date.add(today, -1)
-    x_days_back = Date.add(latest, -1 * (num_days - 1))
-    %{earliest: x_days_back, latest: latest}
+  def search(conn, %{"q" => ""}) do
+    show(conn, [])
   end
 
   def search(conn, %{"q" => query}) do
+    search_path =
+      conn
+      |> search_path(:search_results, q: query)
+      |> Controller.full_path()
+
     query
     |> String.trim()
     |> BlockScoutWeb.Chain.from_param()
     |> case do
       {:ok, item} ->
-        redirect_search_results(conn, item)
+        redirect_search_results(conn, item, search_path)
 
       {:error, :not_found} ->
-        not_found(conn)
+        redirect(conn, to: search_path)
     end
   end
 
   def search(conn, _), do: not_found(conn)
 
-  def token_autocomplete(conn, %{"q" => term}) when is_binary(term) do
-    if term == "" do
-      json(conn, "{}")
-    else
-      result_tokens =
-        term
-        |> String.trim()
-        |> Chain.search_token()
+  def token_autocomplete(conn, %{"q" => term} = params) when is_binary(term) do
+    [paging_options: paging_options] = paging_options(params)
 
-      result_contracts =
-        term
-        |> String.trim()
-        |> Chain.search_contract()
+    {results, _} =
+      paging_options
+      |> Search.joint_search(term)
 
-      result = result_tokens ++ result_contracts
+    encoded_results =
+      results
+      |> Enum.map(fn item ->
+        transaction_hash_bytes = Map.get(item, :transaction_hash)
+        block_hash_bytes = Map.get(item, :block_hash)
 
-      json(conn, result)
-    end
+        item =
+          if transaction_hash_bytes do
+            item
+            |> Map.replace(:transaction_hash, "0x" <> Base.encode16(transaction_hash_bytes, case: :lower))
+          else
+            item
+          end
+
+        item =
+          if block_hash_bytes do
+            item
+            |> Map.replace(:block_hash, "0x" <> Base.encode16(block_hash_bytes, case: :lower))
+          else
+            item
+          end
+
+        item
+      end)
+
+    json(conn, encoded_results)
   end
 
   def token_autocomplete(conn, _) do
@@ -141,23 +149,34 @@ defmodule BlockScoutWeb.ChainController do
     end
   end
 
-  defp redirect_search_results(conn, %Address{} = item) do
-    redirect(conn, to: address_path(conn, :show, item))
+  defp redirect_search_results(conn, %Address{} = item, _search_path) do
+    address_path =
+      conn
+      |> address_path(:show, item)
+      |> Controller.full_path()
+
+    redirect(conn, to: address_path)
   end
 
-  defp redirect_search_results(conn, %Block{} = item) do
-    redirect(conn, to: block_path(conn, :show, item))
+  defp redirect_search_results(conn, %Block{} = item, _search_path) do
+    block_path =
+      conn
+      |> block_path(:show, item)
+      |> Controller.full_path()
+
+    redirect(conn, to: block_path)
   end
 
-  defp redirect_search_results(conn, %Transaction{} = item) do
-    redirect(
-      conn,
-      to:
-        transaction_path(
-          conn,
-          :show,
-          item
-        )
-    )
+  defp redirect_search_results(conn, %Transaction{} = item, _search_path) do
+    transaction_path =
+      conn
+      |> transaction_path(:show, item)
+      |> Controller.full_path()
+
+    redirect(conn, to: transaction_path)
+  end
+
+  defp redirect_search_results(conn, _item, search_path) do
+    redirect(conn, to: search_path)
   end
 end

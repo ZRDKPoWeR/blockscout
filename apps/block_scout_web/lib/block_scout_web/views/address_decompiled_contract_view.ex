@@ -1,5 +1,6 @@
 defmodule BlockScoutWeb.AddressDecompiledContractView do
   use BlockScoutWeb, :view
+  alias Explorer.SmartContract.Helper, as: SmartContractHelper
 
   @colors %{
     "\e[95m" => "",
@@ -230,6 +231,10 @@ defmodule BlockScoutWeb.AddressDecompiledContractView do
     end)
   end
 
+  def last_decompiled_contract_version(decompiled_contracts) when is_nil(decompiled_contracts), do: nil
+
+  def last_decompiled_contract_version(decompiled_contracts) when decompiled_contracts == [], do: nil
+
   def last_decompiled_contract_version(decompiled_contracts) do
     Enum.max_by(decompiled_contracts, & &1.decompiler_version)
   end
@@ -262,7 +267,7 @@ defmodule BlockScoutWeb.AddressDecompiledContractView do
         |> Enum.reduce("", fn p, a ->
           a <> new_style <> p <> "</span>\n"
         end)
-        |> String.slice(0..-2)
+        |> String.slice(0..-2//1)
     end
   end
 end
