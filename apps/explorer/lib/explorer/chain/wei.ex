@@ -20,12 +20,8 @@ defmodule Explorer.Chain.Wei do
 
   """
 
+  require Decimal
   alias Explorer.Chain.Wei
-
-  @derive {Jason.Encoder,
-           except: [
-             :__meta__
-           ]}
 
   defstruct ~w(value)a
 
@@ -122,8 +118,12 @@ defmodule Explorer.Chain.Wei do
   @wei_per_ether Decimal.new(1_000_000_000_000_000_000)
   @wei_per_gwei Decimal.new(1_000_000_000)
 
-  @spec hex_format(Wei.t()) :: String.t()
+  @spec hex_format(Wei.t() | Decimal.t() | nil) :: String.t()
   def hex_format(%Wei{value: decimal}) do
+    hex_format(decimal)
+  end
+
+  def hex_format(%Decimal{} = decimal) do
     hex =
       decimal
       |> Decimal.to_integer()
@@ -131,6 +131,10 @@ defmodule Explorer.Chain.Wei do
       |> String.downcase()
 
     "0x" <> hex
+  end
+
+  def hex_format(nil) do
+    "0x0"
   end
 
   @doc """
@@ -143,13 +147,24 @@ defmodule Explorer.Chain.Wei do
       iex> Explorer.Chain.Wei.sum(first, second)
       %Explorer.Chain.Wei{value: Decimal.new(1_123)}
   """
-  @spec sum(Wei.t(), Wei.t()) :: Wei.t()
+  @spec sum(Wei.t() | nil, Wei.t() | nil) :: Wei.t() | nil
+  def sum(%Wei{value: wei_1}, %Wei{value: nil}) do
+    wei_1
+    |> from(:wei)
+  end
+
+  def sum(%Wei{value: nil}, %Wei{value: wei_2}) do
+    wei_2
+    |> from(:wei)
+  end
+
   def sum(%Wei{value: wei_1}, %Wei{value: wei_2}) do
     wei_1
     |> Decimal.add(wei_2)
     |> from(:wei)
   end
 
+  @spec sub(Wei.t(), Wei.t()) :: Wei.t() | nil
   @doc """
   Subtracts two Wei values.
 
@@ -160,6 +175,8 @@ defmodule Explorer.Chain.Wei do
       iex> Explorer.Chain.Wei.sub(first, second)
       %Explorer.Chain.Wei{value: Decimal.new(123)}
   """
+  def sub(_, nil), do: nil
+
   def sub(%Wei{value: wei_1}, %Wei{value: wei_2}) do
     wei_1
     |> Decimal.sub(wei_2)
@@ -179,6 +196,35 @@ defmodule Explorer.Chain.Wei do
   def mult(%Wei{value: value}, multiplier) when is_integer(multiplier) do
     value
     |> Decimal.mult(multiplier)
+    |> from(:wei)
+  end
+
+  def mult(%Wei{value: value}, %Decimal{} = multiplier) do
+    value
+    |> Decimal.mult(multiplier)
+    |> from(:wei)
+  end
+
+  @doc """
+  Divides Wei values by an `t:integer/0` or `t:Decimal.t/0`.
+
+  ## Example
+
+      iex> wei = %Explorer.Chain.Wei{value: Decimal.new(10)}
+      iex> divisor = 5
+      iex> Explorer.Chain.Wei.div(wei, divisor)
+      %Explorer.Chain.Wei{value: Decimal.new(2)}
+  """
+  @spec div(t(), pos_integer() | Decimal.t()) :: t()
+  def div(%Wei{value: value}, divisor) when is_integer(divisor) and divisor > 0 do
+    value
+    |> Decimal.div(divisor)
+    |> from(:wei)
+  end
+
+  def div(%Wei{value: value}, %Decimal{sign: 1} = divisor) do
+    value
+    |> Decimal.div(divisor)
     |> from(:wei)
   end
 
@@ -205,17 +251,23 @@ defmodule Explorer.Chain.Wei do
 
   """
 
-  @spec from(ether(), :ether) :: t()
+  @spec from(ether() | nil, :ether) :: t() | nil
+  def from(nil, :ether), do: nil
+
   def from(%Decimal{} = ether, :ether) do
     %__MODULE__{value: Decimal.mult(ether, @wei_per_ether)}
   end
 
-  @spec from(gwei(), :gwei) :: t()
+  @spec from(gwei(), :gwei) :: t() | nil
+  def from(nil, :gwei), do: nil
+
   def from(%Decimal{} = gwei, :gwei) do
     %__MODULE__{value: Decimal.mult(gwei, @wei_per_gwei)}
   end
 
   @spec from(wei(), :wei) :: t()
+  def from(nil, :wei), do: nil
+
   def from(%Decimal{} = wei, :wei) do
     %__MODULE__{value: wei}
   end
@@ -246,22 +298,34 @@ defmodule Explorer.Chain.Wei do
 
   """
 
-  @spec to(t(), :ether) :: ether()
+  @spec to(t(), :ether) :: ether() | nil
+  def to(nil, :ether), do: nil
+
   def to(%__MODULE__{value: wei}, :ether) do
     Decimal.div(wei, @wei_per_ether)
   end
 
-  @spec to(t(), :gwei) :: gwei()
+  @spec to(t(), :gwei) :: gwei() | nil
+  def to(nil, :gwei), do: nil
+
   def to(%__MODULE__{value: wei}, :gwei) do
     Decimal.div(wei, @wei_per_gwei)
   end
 
-  @spec to(t(), :wei) :: wei()
+  @spec to(t(), :wei) :: wei() | nil
+  def to(nil, :wei), do: nil
   def to(%__MODULE__{value: wei}, :wei), do: wei
 end
 
 defimpl Inspect, for: Explorer.Chain.Wei do
   def inspect(wei, _) do
     "#Explorer.Chain.Wei<#{Decimal.to_string(wei.value)}>"
+  end
+end
+
+defimpl Jason.Encoder, for: Explorer.Chain.Wei do
+  def encode(wei, opts) do
+    # changed since it's needed to return wei value (which is big number) as string
+    Jason.Encode.struct(wei.value, opts)
   end
 end

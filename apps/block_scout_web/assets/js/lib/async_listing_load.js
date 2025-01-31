@@ -1,6 +1,6 @@
 import $ from 'jquery'
-import map from 'lodash/map'
-import merge from 'lodash/merge'
+import map from 'lodash.map'
+import merge from 'lodash.merge'
 import URI from 'urijs'
 import humps from 'humps'
 import listMorph from '../lib/list_morph'
@@ -42,7 +42,7 @@ import '../app'
  *
  */
 
-var enableFirstLoading = true
+let enableFirstLoading = true
 
 export const asyncInitialState = {
   /* it will consider any query param in the current URI as paging */
@@ -107,24 +107,32 @@ export function asyncReducer (state = asyncInitialState, action) {
         emptyResponse: action.items.length === 0,
         items: action.items,
         nextPagePath: action.nextPagePath,
-        prevPagePath: prevPagePath
+        prevPagePath
       })
     }
     case 'NAVIGATE_TO_OLDER': {
-      history.replaceState({}, null, state.nextPagePath)
+      history.replaceState({}, '', state.nextPagePath)
 
       if (state.pagesStack.length === 0) {
-        state.pagesStack.push(window.location.href.split('?')[0])
+        if (window.location.pathname.includes('/search-results')) {
+          const urlParams = new URLSearchParams(window.location.search)
+          const queryParam = urlParams.get('q')
+          // @ts-ignore
+          state.pagesStack.push(window.location.href.split('?')[0] + `?q=${queryParam}`)
+        } else {
+          // @ts-ignore
+          state.pagesStack.push(window.location.href.split('?')[0])
+        }
       }
 
-      if (state.pagesStack[state.pagesStack.length - 1] !== state.nextPagePath) {
+      if (state.pagesStack[state.pagesStack.length - 1] !== state.nextPagePath && state.nextPagePath) {
         state.pagesStack.push(state.nextPagePath)
       }
 
       return Object.assign({}, state, { beyondPageOne: true })
     }
     case 'NAVIGATE_TO_NEWER': {
-      history.replaceState({}, null, state.prevPagePath)
+      history.replaceState({}, '', state.prevPagePath)
 
       state.pagesStack.pop()
 
@@ -177,7 +185,7 @@ export const elements = {
       if (state.itemKey) {
         const container = $el[0]
         const newElements = map(state.items, (item) => $(item)[0])
-        listMorph(container, newElements, { key: state.itemKey })
+        listMorph(container, newElements, { key: state.itemKey, horizontal: null })
         return
       }
 
@@ -222,16 +230,26 @@ export const elements = {
 
       const urlParams = new URLSearchParams(window.location.search)
       const blockParam = urlParams.get('block_type')
+      const queryParam = urlParams.get('q')
       const firstPageHref = window.location.href.split('?')[0]
 
       $el.show()
       $el.attr('disabled', false)
 
+      let url
       if (blockParam !== null) {
-        $el.attr('href', firstPageHref + '?block_type=' + blockParam)
+        url = firstPageHref + '?block_type=' + blockParam
       } else {
-        $el.attr('href', firstPageHref)
+        url = firstPageHref
       }
+
+      if (queryParam !== null) {
+        url = firstPageHref + '?q=' + queryParam
+      } else {
+        url = firstPageHref
+      }
+
+      $el.attr('href', url)
     }
   },
   '[data-async-listing] [data-page-number]': {
@@ -285,11 +303,11 @@ export const elements = {
  * values passed here will overwrite the values on asyncInitialState.
  *
  * itemKey: it will be added to the state as the key for diffing the elements and
- * adding or removing with the correct animation. Check list_morph.js for more informantion.
+ * adding or removing with the correct animation. Check list_morph.js for more information.
  */
 export function createAsyncLoadStore (reducer, initialState, itemKey) {
   const state = merge(asyncInitialState, initialState)
-  const store = createStore(reduceReducers(asyncReducer, reducer, state))
+  const store = createStore(reduceReducers(state, asyncReducer, reducer))
 
   if (typeof itemKey !== 'undefined') {
     store.dispatch({
@@ -307,7 +325,7 @@ export function refreshPage (store) {
   loadPage(store, store.getState().currentPagePath)
 }
 
-function loadPage (store, path) {
+export function loadPage (store, path) {
   store.dispatch({ type: 'START_REQUEST', path })
   $.getJSON(path, merge({ type: 'JSON' }, store.getState().additionalParams))
     .done(response => store.dispatch(Object.assign({ type: 'ITEMS_FETCHED' }, humps.camelizeKeys(response))))
@@ -351,12 +369,14 @@ function firstPageLoad (store) {
 
 const $element = $('[data-async-load]')
 if ($element.length) {
-  if (Object.prototype.hasOwnProperty.call($element.data(), 'noFirstLoading')) {
-    enableFirstLoading = false
-  }
-  if (enableFirstLoading) {
-    const store = createStore(asyncReducer)
-    connectElements({ store, elements })
-    firstPageLoad(store)
+  if (!Object.prototype.hasOwnProperty.call($element.data(), 'noSelfCalls')) {
+    if (Object.prototype.hasOwnProperty.call($element.data(), 'noFirstLoading')) {
+      enableFirstLoading = false
+    }
+    if (enableFirstLoading) {
+      const store = createStore(asyncReducer)
+      connectElements({ store, elements })
+      firstPageLoad(store)
+    }
   }
 }

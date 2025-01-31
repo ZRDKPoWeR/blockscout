@@ -159,11 +159,12 @@ defmodule Explorer.EtherscanTest do
 
     test "loads block_timestamp" do
       address = insert(:address)
+      block = insert(:block)
 
-      %Transaction{block: block} =
+      %Transaction{} =
         :transaction
-        |> insert(from_address: address)
-        |> with_block()
+        |> insert(from_address: address, block_timestamp: block.timestamp)
+        |> with_block(block)
 
       [found_transaction] = Etherscan.list_transactions(address.hash)
 
@@ -293,8 +294,8 @@ defmodule Explorer.EtherscanTest do
       end
 
       options = %{
-        start_block: second_block.number,
-        end_block: third_block.number
+        startblock: second_block.number,
+        endblock: third_block.number
       }
 
       found_transactions = Etherscan.list_transactions(address.hash, options)
@@ -308,7 +309,7 @@ defmodule Explorer.EtherscanTest do
       end
     end
 
-    test "with start_block but no end_block option" do
+    test "with startblock but no endblock option" do
       blocks = [_, _, third_block, fourth_block] = insert_list(4, :block)
       address = insert(:address)
 
@@ -319,7 +320,7 @@ defmodule Explorer.EtherscanTest do
       end
 
       options = %{
-        start_block: third_block.number
+        startblock: third_block.number
       }
 
       found_transactions = Etherscan.list_transactions(address.hash, options)
@@ -333,7 +334,7 @@ defmodule Explorer.EtherscanTest do
       end
     end
 
-    test "with end_block but no start_block option" do
+    test "with endblock but no startblock option" do
       blocks = [first_block, second_block, _, _] = insert_list(4, :block)
       address = insert(:address)
 
@@ -344,7 +345,7 @@ defmodule Explorer.EtherscanTest do
       end
 
       options = %{
-        end_block: second_block.number
+        endblock: second_block.number
       }
 
       found_transactions = Etherscan.list_transactions(address.hash, options)
@@ -370,7 +371,7 @@ defmodule Explorer.EtherscanTest do
 
       for block <- Enum.concat([blocks1, blocks2, blocks3]) do
         2
-        |> insert_list(:transaction, from_address: address)
+        |> insert_list(:transaction, from_address: address, block_timestamp: block.timestamp)
         |> with_block(block)
       end
 
@@ -629,7 +630,7 @@ defmodule Explorer.EtherscanTest do
 
       transaction =
         :transaction
-        |> insert(from_address: address, to_address: nil)
+        |> insert(from_address: address, to_address: nil, block_timestamp: block.timestamp)
         |> with_contract_creation(contract_address)
         |> with_block(block)
 
@@ -803,6 +804,7 @@ defmodule Explorer.EtherscanTest do
         index: internal_transaction.index,
         transaction_hash: internal_transaction.transaction_hash,
         type: internal_transaction.type,
+        call_type: internal_transaction.call_type,
         gas: internal_transaction.gas,
         gas_used: internal_transaction.gas_used,
         error: internal_transaction.error
@@ -971,8 +973,8 @@ defmodule Explorer.EtherscanTest do
       end
 
       options = %{
-        start_block: second_block.number,
-        end_block: third_block.number
+        startblock: second_block.number,
+        endblock: third_block.number
       }
 
       found_internal_transactions = Etherscan.list_internal_transactions(address.hash, options)
@@ -1114,11 +1116,13 @@ defmodule Explorer.EtherscanTest do
     end
 
     test "returns all required fields" do
+      block = insert(:block)
+
       transaction =
         %{block: block} =
         :transaction
-        |> insert()
-        |> with_block()
+        |> insert(block_timestamp: block.timestamp)
+        |> with_block(block)
 
       token_transfer =
         insert(:token_transfer,
@@ -1361,8 +1365,8 @@ defmodule Explorer.EtherscanTest do
       end
 
       options = %{
-        start_block: second_block.number,
-        end_block: third_block.number
+        startblock: second_block.number,
+        endblock: third_block.number
       }
 
       found_token_transfers = Etherscan.list_token_transfers(address.hash, nil, options)
@@ -1376,7 +1380,7 @@ defmodule Explorer.EtherscanTest do
       end
     end
 
-    test "with start_block but no end_block option" do
+    test "with startblock but no endblock option" do
       blocks = [_, _, third_block, fourth_block] = insert_list(4, :block)
       address = insert(:address)
 
@@ -1394,7 +1398,7 @@ defmodule Explorer.EtherscanTest do
         )
       end
 
-      options = %{start_block: third_block.number}
+      options = %{startblock: third_block.number}
 
       found_token_transfers = Etherscan.list_token_transfers(address.hash, nil, options)
 
@@ -1407,7 +1411,7 @@ defmodule Explorer.EtherscanTest do
       end
     end
 
-    test "with end_block but no start_block option" do
+    test "with endblock but no startblock option" do
       blocks = [first_block, second_block, _, _] = insert_list(4, :block)
       address = insert(:address)
 
@@ -1425,7 +1429,7 @@ defmodule Explorer.EtherscanTest do
         )
       end
 
-      options = %{end_block: second_block.number}
+      options = %{endblock: second_block.number}
 
       found_token_transfers = Etherscan.list_token_transfers(address.hash, nil, options)
 
@@ -1586,46 +1590,13 @@ defmodule Explorer.EtherscanTest do
 
   describe "get_token_balance/2" do
     test "with a single matching token_balance record" do
-      token_balance =
-        %{token_contract_address_hash: contract_address_hash, address_hash: address_hash} = insert(:token_balance)
+      address_current_token_balance =
+        %{token_contract_address_hash: contract_address_hash, address_hash: address_hash} =
+        insert(:address_current_token_balance)
 
       found_token_balance = Etherscan.get_token_balance(contract_address_hash, address_hash)
 
-      assert found_token_balance.id == token_balance.id
-    end
-
-    test "returns token balance in latest block" do
-      token = insert(:token)
-
-      contract_address_hash = token.contract_address_hash
-
-      address = insert(:address)
-
-      token_details1 = %{
-        token_contract_address_hash: contract_address_hash,
-        address: address,
-        block_number: 5
-      }
-
-      token_details2 = %{
-        token_contract_address_hash: contract_address_hash,
-        address: address,
-        block_number: 15
-      }
-
-      token_details3 = %{
-        token_contract_address_hash: contract_address_hash,
-        address: address,
-        block_number: 10
-      }
-
-      _token_balance1 = insert(:token_balance, token_details1)
-      token_balance2 = insert(:token_balance, token_details2)
-      _token_balance3 = insert(:token_balance, token_details3)
-
-      found_token_balance = Etherscan.get_token_balance(contract_address_hash, address.hash)
-
-      assert found_token_balance.id == token_balance2.id
+      assert found_token_balance.id == address_current_token_balance.id
     end
   end
 
@@ -1649,7 +1620,8 @@ defmodule Explorer.EtherscanTest do
           name: token_balance.token.name,
           decimals: token_balance.token.decimals,
           symbol: token_balance.token.symbol,
-          type: token_balance.token.type
+          type: token_balance.token.type,
+          id: token_balance.token_id
         }
       ]
 

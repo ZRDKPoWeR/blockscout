@@ -2,9 +2,8 @@ defmodule BlockScoutWeb.TokensController do
   use BlockScoutWeb, :controller
 
   import BlockScoutWeb.Chain, only: [paging_options: 1, next_page_params: 3, split_list_by_page: 1]
-
-  alias BlockScoutWeb.TokensView
-  alias Explorer.Chain
+  alias BlockScoutWeb.{Controller, TokensView}
+  alias Explorer.Chain.Token
   alias Phoenix.View
 
   def index(conn, %{"type" => "JSON"} = params) do
@@ -19,7 +18,7 @@ defmodule BlockScoutWeb.TokensController do
       params
       |> paging_options()
 
-    tokens = Chain.list_top_tokens(filter, paging_params)
+    tokens = Token.list_top(filter, paging_params)
 
     {tokens_page, next_page} = split_list_by_page(tokens)
 
@@ -54,7 +53,8 @@ defmodule BlockScoutWeb.TokensController do
           TokensView,
           "_tile.html",
           token: token,
-          index: items_count + index
+          index: items_count + index,
+          conn: conn
         )
       end)
 
@@ -68,6 +68,6 @@ defmodule BlockScoutWeb.TokensController do
   end
 
   def index(conn, _params) do
-    render(conn, "index.html", current_path: current_path(conn))
+    render(conn, "index.html", current_path: Controller.current_full_path(conn))
   end
 end

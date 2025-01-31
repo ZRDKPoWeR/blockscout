@@ -3,16 +3,11 @@ defmodule Explorer.SmartContract.Writer do
   Generates smart-contract transactions
   """
 
-  alias Explorer.Chain
+  alias Explorer.Chain.{Hash, SmartContract}
   alias Explorer.SmartContract.Helper
 
-  @spec write_functions(Hash.t()) :: [%{}]
-  def write_functions(contract_address_hash) do
-    abi =
-      contract_address_hash
-      |> Chain.address_hash_to_smart_contract()
-      |> Map.get(:abi)
-
+  @spec write_functions(SmartContract.t()) :: [%{}]
+  def write_functions(%SmartContract{abi: abi}) do
     case abi do
       nil ->
         []
@@ -23,9 +18,9 @@ defmodule Explorer.SmartContract.Writer do
     end
   end
 
-  @spec write_functions_proxy(Hash.t()) :: [%{}]
-  def write_functions_proxy(implementation_address_hash_string) do
-    implementation_abi = Chain.get_implementation_abi(implementation_address_hash_string)
+  @spec write_functions_proxy(Hash.t() | String.t()) :: [%{}]
+  def write_functions_proxy(implementation_address_hash_string, options \\ []) do
+    implementation_abi = SmartContract.get_smart_contract_abi(implementation_address_hash_string, options)
 
     case implementation_abi do
       nil ->
@@ -38,12 +33,14 @@ defmodule Explorer.SmartContract.Writer do
   end
 
   def write_function?(function) do
-    !Helper.event?(function) && !Helper.constructor?(function) &&
+    !Helper.error?(function) && !Helper.event?(function) && !Helper.constructor?(function) &&
       (Helper.payable?(function) || Helper.nonpayable?(function))
   end
 
-  defp filter_write_functions(abi) do
+  def filter_write_functions(abi) when is_list(abi) do
     abi
     |> Enum.filter(&write_function?(&1))
   end
+
+  def filter_write_functions(_), do: []
 end
