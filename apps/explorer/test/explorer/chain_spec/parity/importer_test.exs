@@ -12,6 +12,8 @@ defmodule Explorer.ChainSpec.Parity.ImporterTest do
 
   setup :set_mox_global
 
+  setup :verify_on_exit!
+
   @chain_spec "#{File.cwd!()}/test/support/fixture/chain_spec/foundation.json"
               |> File.read!()
               |> Jason.decode!()
@@ -53,7 +55,7 @@ defmodule Explorer.ChainSpec.Parity.ImporterTest do
       assert {3, nil} = Importer.import_emission_rewards(@chain_spec)
     end
 
-    test "rewrites all recored" do
+    test "rewrites all recorded" do
       old_block_rewards = %{
         "0x0" => "0x1bc16d674ec80000",
         "0x42ae50" => "0x29a2241af62c0000",
@@ -106,9 +108,9 @@ defmodule Explorer.ChainSpec.Parity.ImporterTest do
       assert %{
                address_hash: %Hash{
                  byte_count: 20,
-                 bytes: <<121, 174, 179, 69, 102, 185, 116, 195, 90, 88, 129, 222, 192, 32, 146, 125, 167, 223, 93, 37>>
+                 bytes: <<25, 104, 125, 170, 57, 195, 104, 19, 155, 110, 123, 230, 13, 193, 117, 58, 159, 12, 190, 163>>
                },
-               value: 2_000_000_000_000_000_000_000,
+               value: 8_000_000_000_000_000_000_000,
                contract_code: nil,
                nonce: 0
              } ==

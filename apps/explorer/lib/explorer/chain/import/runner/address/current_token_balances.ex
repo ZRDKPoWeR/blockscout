@@ -10,7 +10,8 @@ defmodule Explorer.Chain.Import.Runner.Address.CurrentTokenBalances do
   alias Ecto.{Changeset, Multi, Repo}
   alias Explorer.Chain.Address.CurrentTokenBalance
   alias Explorer.Chain.{Hash, Import}
-  alias Explorer.Chain.Import.Runner.Tokens
+  alias Explorer.Chain.Import.Runner.{Address.TokenBalances, Tokens}
+  alias Explorer.Prometheus.Instrumenter
 
   @behaviour Import.Runner
 
@@ -106,27 +107,50 @@ defmodule Explorer.Chain.Import.Runner.Address.CurrentTokenBalances do
       |> Map.put_new(:timeout, @timeout)
       |> Map.put(:timestamps, timestamps)
 
-    # Enforce ShareLocks tables order (see docs: sharelocks.md)
     multi
-    |> Multi.run(:acquire_contract_address_tokens, fn repo, _ ->
-      contract_address_hashes = changes_list |> Enum.map(& &1.token_contract_address_hash) |> Enum.uniq()
-      Tokens.acquire_contract_address_tokens(repo, contract_address_hashes)
+    |> Multi.run(:filter_ctb_placeholders, fn _, _ ->
+      Instrumenter.block_import_stage_runner(
+        fn -> TokenBalances.filter_placeholders(changes_list) end,
+        :block_following,
+        :current_token_balances,
+        :filter_ctb_placeholders
+      )
     end)
-    |> Multi.run(:address_current_token_balances, fn repo, _ ->
-      insert(repo, changes_list, insert_options)
+    |> Multi.run(:filter_params, fn repo, %{filter_ctb_placeholders: filtered_changes_list} ->
+      Instrumenter.block_import_stage_runner(
+        fn -> filter_params(repo, filtered_changes_list) end,
+        :block_following,
+        :current_token_balances,
+        :filter_params
+      )
+    end)
+    |> Multi.run(:address_current_token_balances, fn repo, %{filter_params: filtered_changes_list} ->
+      Instrumenter.block_import_stage_runner(
+        fn -> insert(repo, filtered_changes_list, insert_options) end,
+        :block_following,
+        :current_token_balances,
+        :address_current_token_balances
+      )
     end)
     |> Multi.run(:address_current_token_balances_update_token_holder_counts, fn repo,
                                                                                 %{
                                                                                   address_current_token_balances:
                                                                                     upserted_balances
                                                                                 } ->
-      token_holder_count_deltas = upserted_balances_to_holder_count_deltas(upserted_balances)
+      Instrumenter.block_import_stage_runner(
+        fn ->
+          token_holder_count_deltas = upserted_balances_to_holder_count_deltas(upserted_balances)
 
-      # ShareLocks order already enforced by `acquire_contract_address_tokens` (see docs: sharelocks.md)
-      Tokens.update_holder_counts_with_deltas(
-        repo,
-        token_holder_count_deltas,
-        insert_options
+          # ShareLocks order already enforced by `acquire_contract_address_tokens` (see docs: sharelocks.md)
+          Tokens.update_holder_counts_with_deltas(
+            repo,
+            token_holder_count_deltas,
+            insert_options
+          )
+        end,
+        :block_following,
+        :current_token_balances,
+        :address_current_token_balances_update_token_holder_counts
       )
     end)
   end
@@ -135,7 +159,7 @@ defmodule Explorer.Chain.Import.Runner.Address.CurrentTokenBalances do
   def timeout, do: @timeout
 
   defp valid_holder?(value) do
-    not is_nil(value) and Decimal.cmp(value, 0) == :gt
+    not is_nil(value) and Decimal.compare(value, 0) == :gt
   end
 
   # Assumes existence of old_value field with previous value or nil
@@ -189,6 +213,92 @@ defmodule Explorer.Chain.Import.Runner.Address.CurrentTokenBalances do
     end
   end
 
+  defp filter_params(repo, changes_list) do
+    {params_without_token_id, params_with_token_id} = Enum.split_with(changes_list, &is_nil(&1[:token_id]))
+
+    existing_ctb_without_token_id = select_existing_current_token_balances(repo, params_without_token_id, false)
+    existing_ctb_with_token_id = select_existing_current_token_balances(repo, params_with_token_id, true)
+
+    existing_ctb_map =
+      existing_ctb_without_token_id
+      |> Enum.concat(existing_ctb_with_token_id)
+      |> Map.new(fn ctb ->
+        {{ctb.address_hash, ctb.token_contract_address_hash, ctb.token_id},
+         %{block_number: ctb.block_number, value: ctb.value, value_fetched_at: ctb.value_fetched_at}}
+      end)
+
+    filtered_ctbs =
+      Enum.filter(changes_list, fn ctb ->
+        existing_ctb = existing_ctb_map[{ctb[:address_hash], ctb[:token_contract_address_hash], ctb[:token_id]}]
+        should_update?(ctb, existing_ctb)
+      end)
+
+    {:ok, filtered_ctbs}
+  end
+
+  defp select_existing_current_token_balances(_repo, [], _with_token_id?), do: []
+
+  defp select_existing_current_token_balances(repo, params, with_token_id?) do
+    params
+    |> existing_ctb_query(with_token_id?)
+    |> repo.all()
+  end
+
+  defp existing_ctb_query(params, false) do
+    ids =
+      params
+      |> Enum.map(&{&1.address_hash.bytes, &1.token_contract_address_hash.bytes})
+      |> Enum.uniq()
+
+    from(
+      ctb in CurrentTokenBalance,
+      where: is_nil(ctb.token_id),
+      where:
+        fragment(
+          "(?, ?) = ANY(?::ft_current_token_balance_id[])",
+          ctb.address_hash,
+          ctb.token_contract_address_hash,
+          ^ids
+        )
+    )
+  end
+
+  defp existing_ctb_query(params, true) do
+    ids =
+      params
+      |> Enum.map(&{&1.address_hash.bytes, &1.token_contract_address_hash.bytes, &1.token_id})
+      |> Enum.uniq()
+
+    from(
+      ctb in CurrentTokenBalance,
+      where:
+        fragment(
+          "(?, ?, ?) = ANY(?::nft_current_token_balance_id[])",
+          ctb.address_hash,
+          ctb.token_contract_address_hash,
+          ctb.token_id,
+          ^ids
+        )
+    )
+  end
+
+  # ctb does not exist
+  defp should_update?(_new_ctb, nil), do: true
+
+  # new ctb has no value
+  defp should_update?(%{value_fetched_at: nil}, _existing_ctb), do: false
+
+  # new ctb is newer
+  defp should_update?(%{block_number: new_ctb_block_number}, %{block_number: existing_ctb_block_number})
+       when new_ctb_block_number > existing_ctb_block_number,
+       do: true
+
+  # new ctb is the same height or older
+  defp should_update?(new_ctb, existing_ctb) do
+    existing_ctb.block_number == new_ctb.block_number and not is_nil(Map.get(new_ctb, :value)) and
+      (is_nil(existing_ctb.value_fetched_at) or existing_ctb.value_fetched_at < new_ctb.value_fetched_at)
+  end
+
   @spec insert(Repo.t(), [map()], %{
           optional(:on_conflict) => Import.Runner.on_conflict(),
           required(:timeout) => timeout(),
@@ -198,21 +308,57 @@ defmodule Explorer.Chain.Import.Runner.Address.CurrentTokenBalances do
           | {:error, [Changeset.t()]}
   defp insert(repo, changes_list, %{timeout: timeout, timestamps: timestamps} = options)
        when is_atom(repo) and is_list(changes_list) do
+    inserted_changes_list =
+      insert_changes_list_with_and_without_token_id(changes_list, repo, timestamps, timeout, options)
+
+    {:ok, inserted_changes_list}
+  end
+
+  def insert_changes_list_with_and_without_token_id(changes_list, repo, timestamps, timeout, options) do
     on_conflict = Map.get_lazy(options, :on_conflict, &default_on_conflict/0)
 
     # Enforce CurrentTokenBalance ShareLocks order (see docs: sharelocks.md)
-    ordered_changes_list = Enum.sort_by(changes_list, &{&1.token_contract_address_hash, &1.address_hash})
+    ordered_changes_list =
+      changes_list
+      |> Enum.map(fn change ->
+        if Map.has_key?(change, :token_id) and
+             (Map.get(change, :token_type) == "ERC-1155" || Map.get(change, :token_type) == "ERC-404") do
+          change
+        else
+          Map.put(change, :token_id, nil)
+        end
+      end)
+      |> Enum.group_by(fn %{
+                            address_hash: address_hash,
+                            token_contract_address_hash: token_contract_address_hash,
+                            token_id: token_id
+                          } ->
+        {address_hash, token_contract_address_hash, token_id}
+      end)
+      |> Enum.map(fn {_, grouped_address_token_balances} ->
+        Enum.max_by(grouped_address_token_balances, fn balance ->
+          {Map.get(balance, :block_number), Map.get(balance, :value_fetched_at)}
+        end)
+      end)
+      |> Enum.sort_by(&{&1.token_contract_address_hash, &1.token_id, &1.address_hash})
 
-    Import.insert_changes_list(
-      repo,
-      ordered_changes_list,
-      conflict_target: ~w(address_hash token_contract_address_hash)a,
-      on_conflict: on_conflict,
-      for: CurrentTokenBalance,
-      returning: true,
-      timeout: timeout,
-      timestamps: timestamps
-    )
+    {:ok, inserted_changes_list} =
+      if Enum.empty?(ordered_changes_list) do
+        {:ok, []}
+      else
+        Import.insert_changes_list(
+          repo,
+          ordered_changes_list,
+          conflict_target: {:unsafe_fragment, ~s<(address_hash, token_contract_address_hash, COALESCE(token_id, -1))>},
+          on_conflict: on_conflict,
+          for: CurrentTokenBalance,
+          returning: true,
+          timeout: timeout,
+          timestamps: timestamps
+        )
+      end
+
+    inserted_changes_list
   end
 
   defp default_on_conflict do
@@ -224,15 +370,18 @@ defmodule Explorer.Chain.Import.Runner.Address.CurrentTokenBalances do
           value: fragment("EXCLUDED.value"),
           value_fetched_at: fragment("EXCLUDED.value_fetched_at"),
           old_value: current_token_balance.value,
+          token_type: fragment("EXCLUDED.token_type"),
           inserted_at: fragment("LEAST(EXCLUDED.inserted_at, ?)", current_token_balance.inserted_at),
           updated_at: fragment("GREATEST(EXCLUDED.updated_at, ?)", current_token_balance.updated_at)
         ]
       ],
       where:
-        fragment("? < EXCLUDED.block_number", current_token_balance.block_number) or
-          (fragment("EXCLUDED.value IS NOT NULL") and
-             is_nil(current_token_balance.value_fetched_at) and
-             fragment("? = EXCLUDED.block_number", current_token_balance.block_number))
+        fragment("EXCLUDED.value_fetched_at IS NOT NULL") and
+          (fragment("? < EXCLUDED.block_number", current_token_balance.block_number) or
+             (fragment("? = EXCLUDED.block_number", current_token_balance.block_number) and
+                fragment("EXCLUDED.value IS NOT NULL") and
+                (is_nil(current_token_balance.value_fetched_at) or
+                   fragment("? < EXCLUDED.value_fetched_at", current_token_balance.value_fetched_at))))
     )
   end
 

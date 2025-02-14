@@ -30,7 +30,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
         transport: EthereumJSONRPC.Mox,
         transport_options: [],
         # Which one does not matter, so pick one
-        variant: EthereumJSONRPC.Parity
+        variant: EthereumJSONRPC.Nethermind
       ]
     }
   end
@@ -117,20 +117,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
         }
       end)
 
-      res = eth_block_number_fake_response(block_quantity)
-
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn [
-                                %{
-                                  id: 0,
-                                  jsonrpc: "2.0",
-                                  method: "eth_getBlockByNumber",
-                                  params: [^block_quantity, true]
-                                }
-                              ],
-                              _ ->
-        {:ok, [res]}
-      end)
+      _res = eth_block_number_fake_response(block_quantity)
 
       assert count(Chain.Block.Reward) == 0
 
@@ -139,15 +126,15 @@ defmodule Indexer.Fetcher.BlockRewardTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, balance_fields}} ->
+            {:"$gen_call", from, {:buffer, balance_fields, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:balance_fields, balance_fields})
           end
         end)
 
-      Process.register(pid, Indexer.Fetcher.CoinBalance)
+      Process.register(pid, Indexer.Fetcher.CoinBalance.Catchup)
 
-      assert :ok = BlockReward.async_fetch([block_number])
+      assert :ok = BlockReward.async_fetch([block_number], false)
 
       wait_for_tasks(BlockReward)
 
@@ -205,35 +192,22 @@ defmodule Indexer.Fetcher.BlockRewardTest do
         }
       end)
 
-      res = eth_block_number_fake_response(block_quantity)
-
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn [
-                                %{
-                                  id: 0,
-                                  jsonrpc: "2.0",
-                                  method: "eth_getBlockByNumber",
-                                  params: [^block_quantity, true]
-                                }
-                              ],
-                              _ ->
-        {:ok, [res]}
-      end)
+      _res = eth_block_number_fake_response(block_quantity)
 
       parent = self()
 
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, balance_fields}} ->
+            {:"$gen_call", from, {:buffer, balance_fields, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:balance_fields, balance_fields})
           end
         end)
 
-      Process.register(pid, Indexer.Fetcher.CoinBalance)
+      Process.register(pid, Indexer.Fetcher.CoinBalance.Catchup)
 
-      assert :ok = BlockReward.async_fetch([block_number])
+      assert :ok = BlockReward.async_fetch([block_number], false)
 
       wait_for_tasks(BlockReward)
 
@@ -286,7 +260,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
         }
       end)
 
-      assert :ok = BlockReward.async_fetch([block_number])
+      assert :ok = BlockReward.async_fetch([block_number], false)
 
       wait_for_tasks(BlockReward)
 
@@ -350,20 +324,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
         }
       end)
 
-      res = eth_block_number_fake_response(block_quantity)
-
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn [
-                                %{
-                                  id: 0,
-                                  jsonrpc: "2.0",
-                                  method: "eth_getBlockByNumber",
-                                  params: [^block_quantity, true]
-                                }
-                              ],
-                              _ ->
-        {:ok, [res]}
-      end)
+      _res = eth_block_number_fake_response(block_quantity)
 
       assert count(Chain.Block.Reward) == 0
       assert count(Chain.Address.CoinBalance) == 0
@@ -373,13 +334,13 @@ defmodule Indexer.Fetcher.BlockRewardTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, balance_fields}} ->
+            {:"$gen_call", from, {:buffer, balance_fields, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:balance_fields, balance_fields})
           end
         end)
 
-      Process.register(pid, Indexer.Fetcher.CoinBalance)
+      Process.register(pid, Indexer.Fetcher.CoinBalance.Catchup)
 
       assert :ok = BlockReward.run([block_number], json_rpc_named_arguments)
 
@@ -453,20 +414,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
         }
       end)
 
-      res = eth_block_number_fake_response(block_quantity)
-
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn [
-                                %{
-                                  id: 0,
-                                  jsonrpc: "2.0",
-                                  method: "eth_getBlockByNumber",
-                                  params: [^block_quantity, true]
-                                }
-                              ],
-                              _ ->
-        {:ok, [res]}
-      end)
+      _res = eth_block_number_fake_response(block_quantity)
 
       assert count(Chain.Block.Reward) == 0
       assert count(Chain.Address.CoinBalance) == 0
@@ -476,13 +424,13 @@ defmodule Indexer.Fetcher.BlockRewardTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, balance_fields}} ->
+            {:"$gen_call", from, {:buffer, balance_fields, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:balance_fields, balance_fields})
           end
         end)
 
-      Process.register(pid, Indexer.Fetcher.CoinBalance)
+      Process.register(pid, Indexer.Fetcher.CoinBalance.Catchup)
 
       assert :ok = BlockReward.run([block_number], json_rpc_named_arguments)
 
@@ -546,20 +494,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
         }
       end)
 
-      res = eth_block_number_fake_response(block_quantity)
-
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn [
-                                %{
-                                  id: 0,
-                                  jsonrpc: "2.0",
-                                  method: "eth_getBlockByNumber",
-                                  params: [^block_quantity, true]
-                                }
-                              ],
-                              _ ->
-        {:ok, [res]}
-      end)
+      _res = eth_block_number_fake_response(block_quantity)
 
       assert count(Chain.Block.Reward) == 1
       assert count(Chain.Address.CoinBalance) == 1
@@ -573,13 +508,13 @@ defmodule Indexer.Fetcher.BlockRewardTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, balance_fields}} ->
+            {:"$gen_call", from, {:buffer, balance_fields, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:balance_fields, balance_fields})
           end
         end)
 
-      Process.register(pid, Indexer.Fetcher.CoinBalance)
+      Process.register(pid, Indexer.Fetcher.CoinBalance.Catchup)
 
       assert :ok = BlockReward.run([block_number], json_rpc_named_arguments)
 
@@ -700,20 +635,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
         }
       end)
 
-      res = eth_block_number_fake_response(block_quantity)
-
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn [
-                                %{
-                                  id: 0,
-                                  jsonrpc: "2.0",
-                                  method: "eth_getBlockByNumber",
-                                  params: [^block_quantity, true]
-                                }
-                              ],
-                              _ ->
-        {:ok, [res]}
-      end)
+      _res = eth_block_number_fake_response(block_quantity)
 
       assert count(Chain.Block.Reward) == 0
       assert count(Chain.Address.CoinBalance) == 0
@@ -723,13 +645,13 @@ defmodule Indexer.Fetcher.BlockRewardTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, balance_fields}} ->
+            {:"$gen_call", from, {:buffer, balance_fields, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:balance_fields, balance_fields})
           end
         end)
 
-      Process.register(pid, Indexer.Fetcher.CoinBalance)
+      Process.register(pid, Indexer.Fetcher.CoinBalance.Catchup)
 
       assert {:retry, [^error_block_number]} =
                BlockReward.run([block_number, error_block_number], json_rpc_named_arguments)

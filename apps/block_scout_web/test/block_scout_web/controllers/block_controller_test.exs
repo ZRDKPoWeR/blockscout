@@ -15,14 +15,14 @@ defmodule BlockScoutWeb.BlockControllerTest do
     test "with block redirects to block transactions route", %{conn: conn} do
       insert(:block, number: 3)
       conn = get(conn, "/blocks/3")
-      assert redirected_to(conn) =~ "/blocks/3/transactions"
+      assert redirected_to(conn) =~ "/block/3/transactions"
     end
 
     test "with uncle block redirects to block_hash route", %{conn: conn} do
       uncle = insert(:block, consensus: false)
 
       conn = get(conn, block_path(conn, :show, uncle))
-      assert redirected_to(conn) =~ "/blocks/#{to_string(uncle.hash)}/transactions"
+      assert redirected_to(conn) =~ "/block/#{to_string(uncle.hash)}/transactions"
     end
   end
 
@@ -33,7 +33,7 @@ defmodule BlockScoutWeb.BlockControllerTest do
       |> Stream.map(& &1.number)
       |> Enum.reverse()
 
-      conn = get(conn, block_path(conn, :index), %{"type" => "JSON"})
+      conn = get(conn, blocks_path(conn, :index), %{"type" => "JSON"})
 
       items = Map.get(json_response(conn, 200), "items")
 
@@ -51,7 +51,7 @@ defmodule BlockScoutWeb.BlockControllerTest do
         insert(:block_second_degree_relation, uncle_hash: uncle.hash, nephew: Enum.at(blocks, index))
       end
 
-      conn = get(conn, block_path(conn, :index), %{"type" => "JSON"})
+      conn = get(conn, blocks_path(conn, :index), %{"type" => "JSON"})
 
       items = Map.get(json_response(conn, 200), "items")
 
@@ -65,7 +65,7 @@ defmodule BlockScoutWeb.BlockControllerTest do
       |> insert_list(:transaction)
       |> with_block(block)
 
-      conn = get(conn, block_path(conn, :index), %{"type" => "JSON"})
+      conn = get(conn, blocks_path(conn, :index), %{"type" => "JSON"})
 
       items = Map.get(json_response(conn, 200), "items")
 
@@ -80,7 +80,7 @@ defmodule BlockScoutWeb.BlockControllerTest do
       block = insert(:block)
 
       conn =
-        get(conn, block_path(conn, :index), %{
+        get(conn, blocks_path(conn, :index), %{
           "type" => "JSON",
           "block_number" => Integer.to_string(block.number)
         })
@@ -96,14 +96,9 @@ defmodule BlockScoutWeb.BlockControllerTest do
         |> insert_list(:block)
         |> Enum.fetch!(10)
 
-      conn = get(conn, block_path(conn, :index), %{"type" => "JSON"})
+      conn = get(conn, blocks_path(conn, :index), %{"type" => "JSON"})
 
-      expected_path =
-        block_path(conn, :index, %{
-          block_number: number,
-          block_type: "Block",
-          items_count: "50"
-        })
+      expected_path = blocks_path(conn, :index, block_number: number, block_type: "Block", items_count: "50")
 
       assert Map.get(json_response(conn, 200), "next_page_path") == expected_path
     end
@@ -111,7 +106,7 @@ defmodule BlockScoutWeb.BlockControllerTest do
     test "next_page_path is empty if on last page", %{conn: conn} do
       insert(:block)
 
-      conn = get(conn, block_path(conn, :index), %{"type" => "JSON"})
+      conn = get(conn, blocks_path(conn, :index), %{"type" => "JSON"})
 
       refute conn |> json_response(200) |> Map.get("next_page_path")
     end
@@ -122,7 +117,7 @@ defmodule BlockScoutWeb.BlockControllerTest do
 
       insert(:block, miner: miner_address, miner_hash: nil)
 
-      conn = get(conn, block_path(conn, :index), %{"type" => "JSON"})
+      conn = get(conn, blocks_path(conn, :index), %{"type" => "JSON"})
 
       items = Map.get(json_response(conn, 200), "items")
 
@@ -134,7 +129,7 @@ defmodule BlockScoutWeb.BlockControllerTest do
     test "returns all reorgs", %{conn: conn} do
       4
       |> insert_list(:block, consensus: false)
-      |> Enum.map(& &1.hash)
+      |> Enum.each(fn b -> insert(:block, number: b.number, consensus: true) end)
 
       conn = get(conn, reorg_path(conn, :reorg), %{"type" => "JSON"})
 
@@ -146,7 +141,7 @@ defmodule BlockScoutWeb.BlockControllerTest do
     test "does not include blocks or uncles", %{conn: conn} do
       4
       |> insert_list(:block, consensus: false)
-      |> Enum.map(& &1.hash)
+      |> Enum.each(fn b -> insert(:block, number: b.number, consensus: true) end)
 
       insert(:block)
       uncle = insert(:block, consensus: false)

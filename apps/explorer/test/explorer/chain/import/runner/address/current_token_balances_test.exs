@@ -65,6 +65,184 @@ defmodule Explorer.Chain.Import.Runner.Address.CurrentTokenBalancesTest do
       assert current_token_balances == 1
     end
 
+    test "inserts values for multiple token IDs in the current token balances", %{
+      address: %Address{hash: address_hash},
+      token: %Token{contract_address_hash: token_contract_address_hash},
+      options: options
+    } do
+      value_1 = Decimal.new(111)
+      token_id_1 = Decimal.new(1)
+
+      value_2 = Decimal.new(222)
+      token_id_2 = Decimal.new(2)
+
+      token_erc_20 = insert(:token, holder_count: 0)
+      token_erc_20_contract_address_hash = token_erc_20.contract_address_hash
+      value_3 = Decimal.new(333)
+      token_id_3 = nil
+
+      token_erc_721 = insert(:token, holder_count: 0)
+      token_erc_721_contract_address_hash = token_erc_721.contract_address_hash
+      value_4 = Decimal.new(1)
+      token_id_4 = Decimal.new(1)
+
+      value_5 = Decimal.new(2)
+      token_id_5 = Decimal.new(555)
+
+      token_erc_404 = insert(:token, holder_count: 0)
+      token_erc_404_contract_address_hash = token_erc_404.contract_address_hash
+      value_6 = Decimal.new(10)
+      token_id_6 = Decimal.new(333)
+
+      value_7 = Decimal.new(25)
+
+      block_number = 1
+
+      assert {:ok,
+              %{
+                address_current_token_balances: [
+                  %Explorer.Chain.Address.CurrentTokenBalance{
+                    address_hash: ^address_hash,
+                    block_number: ^block_number,
+                    token_contract_address_hash: ^token_contract_address_hash,
+                    value: ^value_1,
+                    token_id: ^token_id_1
+                  },
+                  %Explorer.Chain.Address.CurrentTokenBalance{
+                    address_hash: ^address_hash,
+                    block_number: ^block_number,
+                    token_contract_address_hash: ^token_contract_address_hash,
+                    value: ^value_2,
+                    token_id: ^token_id_2
+                  },
+                  %Explorer.Chain.Address.CurrentTokenBalance{
+                    address_hash: ^address_hash,
+                    block_number: ^block_number,
+                    token_contract_address_hash: ^token_erc_20_contract_address_hash,
+                    value: ^value_3,
+                    token_id: ^token_id_3
+                  },
+                  %Explorer.Chain.Address.CurrentTokenBalance{
+                    address_hash: ^address_hash,
+                    block_number: ^block_number,
+                    token_contract_address_hash: ^token_erc_721_contract_address_hash,
+                    value: ^value_5,
+                    token_id: nil
+                  },
+                  %Explorer.Chain.Address.CurrentTokenBalance{
+                    address_hash: ^address_hash,
+                    block_number: ^block_number,
+                    token_contract_address_hash: ^token_erc_404_contract_address_hash,
+                    value: ^value_7,
+                    token_id: nil
+                  },
+                  %Explorer.Chain.Address.CurrentTokenBalance{
+                    address_hash: ^address_hash,
+                    block_number: ^block_number,
+                    token_contract_address_hash: ^token_erc_404_contract_address_hash,
+                    value: ^value_6,
+                    token_id: ^token_id_6
+                  }
+                ],
+                address_current_token_balances_update_token_holder_counts: [
+                  %{
+                    contract_address_hash: ^token_contract_address_hash,
+                    holder_count: 2
+                  },
+                  %{
+                    contract_address_hash: ^token_erc_20_contract_address_hash,
+                    holder_count: 1
+                  },
+                  %{
+                    contract_address_hash: ^token_erc_721_contract_address_hash,
+                    holder_count: 1
+                  },
+                  %{
+                    contract_address_hash: ^token_erc_404_contract_address_hash,
+                    holder_count: 2
+                  }
+                ]
+              }} =
+               run_changes_list(
+                 [
+                   %{
+                     address_hash: address_hash,
+                     block_number: block_number,
+                     token_contract_address_hash: token_contract_address_hash,
+                     value: value_1,
+                     value_fetched_at: DateTime.utc_now(),
+                     token_id: token_id_1,
+                     token_type: "ERC-1155"
+                   },
+                   %{
+                     address_hash: address_hash,
+                     block_number: block_number,
+                     token_contract_address_hash: token_contract_address_hash,
+                     value: value_2,
+                     value_fetched_at: DateTime.utc_now(),
+                     token_id: token_id_2,
+                     token_type: "ERC-1155"
+                   },
+                   %{
+                     address_hash: address_hash,
+                     block_number: block_number,
+                     token_contract_address_hash: token_erc_20.contract_address_hash,
+                     value: value_3,
+                     value_fetched_at: DateTime.utc_now(),
+                     token_id: token_id_3,
+                     token_type: "ERC-20"
+                   },
+                   %{
+                     address_hash: address_hash,
+                     block_number: block_number,
+                     token_contract_address_hash: token_erc_721.contract_address_hash,
+                     value: value_4,
+                     value_fetched_at: DateTime.add(DateTime.utc_now(), -1),
+                     token_id: token_id_4,
+                     token_type: "ERC-721"
+                   },
+                   %{
+                     address_hash: address_hash,
+                     block_number: block_number,
+                     token_contract_address_hash: token_erc_721.contract_address_hash,
+                     value: value_5,
+                     value_fetched_at: DateTime.utc_now(),
+                     token_id: token_id_5,
+                     token_type: "ERC-721"
+                   },
+                   %{
+                     address_hash: address_hash,
+                     block_number: block_number,
+                     token_contract_address_hash: token_erc_404_contract_address_hash,
+                     value: value_6,
+                     value_fetched_at: DateTime.utc_now(),
+                     token_id: token_id_6,
+                     token_type: "ERC-404"
+                   },
+                   %{
+                     address_hash: address_hash,
+                     block_number: block_number,
+                     token_contract_address_hash: token_erc_404_contract_address_hash,
+                     value: value_7,
+                     value_fetched_at: DateTime.utc_now(),
+                     token_id: nil,
+                     token_type: "ERC-404"
+                   }
+                 ],
+                 options
+               )
+
+      current_token_balances =
+        CurrentTokenBalance
+        |> Repo.all()
+
+      current_token_balances_count =
+        current_token_balances
+        |> Enum.count()
+
+      assert current_token_balances_count == 6
+    end
+
     test "updates when the new block number is greater", %{
       address: address,
       token: token,
@@ -83,7 +261,8 @@ defmodule Explorer.Chain.Import.Runner.Address.CurrentTokenBalancesTest do
           address_hash: address.hash,
           block_number: 2,
           token_contract_address_hash: token.contract_address_hash,
-          value: Decimal.new(200)
+          value: Decimal.new(200),
+          value_fetched_at: DateTime.utc_now()
         },
         options
       )
@@ -165,7 +344,8 @@ defmodule Explorer.Chain.Import.Runner.Address.CurrentTokenBalancesTest do
                    address_hash: address_hash,
                    token_contract_address_hash: token_contract_address_hash,
                    block_number: block_number,
-                   value: value
+                   value: value,
+                   value_fetched_at: DateTime.utc_now()
                  },
                  options
                )
@@ -209,7 +389,8 @@ defmodule Explorer.Chain.Import.Runner.Address.CurrentTokenBalancesTest do
                    address_hash: address_hash,
                    token_contract_address_hash: token_contract_address_hash,
                    block_number: block_number,
-                   value: value
+                   value: value,
+                   value_fetched_at: DateTime.utc_now()
                  },
                  options
                )
@@ -269,13 +450,15 @@ defmodule Explorer.Chain.Import.Runner.Address.CurrentTokenBalancesTest do
                      address_hash: non_holder_becomes_holder_address_hash,
                      token_contract_address_hash: token_contract_address_hash,
                      block_number: block_number,
-                     value: non_holder_becomes_holder_value
+                     value: non_holder_becomes_holder_value,
+                     value_fetched_at: DateTime.utc_now()
                    },
                    %{
                      address_hash: holder_becomes_non_holder_address_hash,
                      token_contract_address_hash: token_contract_address_hash,
                      block_number: block_number,
-                     value: holder_becomes_non_holder_value
+                     value: holder_becomes_non_holder_value,
+                     value_fetched_at: DateTime.utc_now()
                    }
                  ],
                  options

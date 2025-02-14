@@ -4,7 +4,9 @@ defmodule BlockScoutWeb.SmartContractControllerTest do
   import Mox
 
   alias Explorer.Chain.{Address, Hash}
-  alias Explorer.Factory
+  alias Explorer.{Factory, TestHelper}
+
+  setup :set_mox_from_context
 
   setup :verify_on_exit!
 
@@ -33,7 +35,7 @@ defmodule BlockScoutWeb.SmartContractControllerTest do
     end
 
     test "only responds to ajax requests", %{conn: conn} do
-      smart_contract = insert(:smart_contract)
+      smart_contract = insert(:smart_contract, contract_code_md5: "123")
 
       path = smart_contract_path(BlockScoutWeb.Endpoint, :index, hash: smart_contract.address_hash)
 
@@ -45,7 +47,7 @@ defmodule BlockScoutWeb.SmartContractControllerTest do
     test "lists the smart contract read only functions" do
       token_contract_address = insert(:contract_address)
 
-      insert(:smart_contract, address_hash: token_contract_address.hash)
+      insert(:smart_contract, address_hash: token_contract_address.hash, contract_code_md5: "123")
 
       blockchain_get_function_mock()
 
@@ -80,8 +82,11 @@ defmodule BlockScoutWeb.SmartContractControllerTest do
             "inputs" => [],
             "constant" => true
           }
-        ]
+        ],
+        contract_code_md5: "123"
       )
+
+      TestHelper.get_eip1967_implementation_zero_addresses()
 
       path =
         smart_contract_path(BlockScoutWeb.Endpoint, :index,
@@ -114,7 +119,8 @@ defmodule BlockScoutWeb.SmartContractControllerTest do
             "inputs" => [],
             "constant" => false
           }
-        ]
+        ],
+        contract_code_md5: "123"
       )
 
       blockchain_get_implementation_mock()
@@ -150,7 +156,8 @@ defmodule BlockScoutWeb.SmartContractControllerTest do
             "inputs" => [],
             "constant" => false
           }
-        ]
+        ],
+        contract_code_md5: "123"
       )
 
       blockchain_get_implementation_mock_2()
@@ -212,7 +219,7 @@ defmodule BlockScoutWeb.SmartContractControllerTest do
     end
 
     test "only responds to ajax requests", %{conn: conn} do
-      smart_contract = insert(:smart_contract)
+      smart_contract = insert(:smart_contract, contract_code_md5: "123")
 
       path =
         smart_contract_path(
@@ -230,9 +237,7 @@ defmodule BlockScoutWeb.SmartContractControllerTest do
 
     test "fetch the function value from the blockchain" do
       address = insert(:contract_address)
-      smart_contract = insert(:smart_contract, address_hash: address.hash)
-
-      get_eip1967_implementation()
+      smart_contract = insert(:smart_contract, address_hash: address.hash, contract_code_md5: "123")
 
       blockchain_get_function_mock()
 
@@ -243,6 +248,7 @@ defmodule BlockScoutWeb.SmartContractControllerTest do
           Address.checksum(smart_contract.address_hash),
           function_name: "get",
           method_id: "6d4ce63c",
+          args_count: 0,
           args: []
         )
 
@@ -272,37 +278,15 @@ defmodule BlockScoutWeb.SmartContractControllerTest do
   end
 
   defp blockchain_get_implementation_mock do
-    expect(
-      EthereumJSONRPC.Mox,
-      :json_rpc,
-      fn %{id: _, method: _, params: [_, _, _]}, _options ->
-        {:ok, "0xcebb2CCCFe291F0c442841cBE9C1D06EED61Ca02"}
-      end
-    )
+    EthereumJSONRPC.Mox
+    |> TestHelper.mock_logic_storage_pointer_request(false, "0xcebb2CCCFe291F0c442841cBE9C1D06EED61Ca02")
   end
 
   defp blockchain_get_implementation_mock_2 do
-    expect(
-      EthereumJSONRPC.Mox,
-      :json_rpc,
-      fn %{id: _, method: _, params: [_, _, _]}, _options ->
-        {:ok, "0x000000000000000000000000cebb2CCCFe291F0c442841cBE9C1D06EED61Ca02"}
-      end
+    EthereumJSONRPC.Mox
+    |> TestHelper.mock_logic_storage_pointer_request(
+      false,
+      "0x000000000000000000000000cebb2CCCFe291F0c442841cBE9C1D06EED61Ca02"
     )
-  end
-
-  def get_eip1967_implementation do
-    expect(EthereumJSONRPC.Mox, :json_rpc, fn %{
-                                                id: 0,
-                                                method: "eth_getStorageAt",
-                                                params: [
-                                                  _,
-                                                  "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
-                                                  "latest"
-                                                ]
-                                              },
-                                              _options ->
-      {:ok, "0x0000000000000000000000000000000000000000000000000000000000000000"}
-    end)
   end
 end

@@ -1,7 +1,6 @@
 defmodule Indexer.Temporary.UncatalogedTokenTransfersTest do
   use Explorer.DataCase
 
-  alias Indexer.Block.Catchup.Sequence
   alias Indexer.Temporary.UncatalogedTokenTransfers
 
   @moduletag :capture_log
@@ -34,20 +33,23 @@ defmodule Indexer.Temporary.UncatalogedTokenTransfersTest do
       block = insert(:block)
       address = insert(:address)
 
-      log =
-        insert(:token_transfer_log,
-          transaction:
-            insert(:transaction,
-              block_number: block.number,
-              block_hash: block.hash,
-              cumulative_gas_used: 0,
-              gas_used: 0,
-              index: 0
-            ),
-          address_hash: address.hash
+      transaction =
+        insert(:transaction,
+          block_number: block.number,
+          block_hash: block.hash,
+          cumulative_gas_used: 0,
+          gas_used: 0,
+          index: 0
         )
 
-      block_number = log.transaction.block_number
+      log =
+        insert(:token_transfer_log,
+          transaction: transaction,
+          address_hash: address.hash,
+          block: block
+        )
+
+      block_number = log.block_number
 
       expected_state = %{task_ref: nil, block_numbers: [block_number], retry_interval: 1}
       state = %{task_ref: nil, block_numbers: [], retry_interval: 1}
@@ -60,7 +62,6 @@ defmodule Indexer.Temporary.UncatalogedTokenTransfersTest do
   describe "handle_info with :push_front_blocks" do
     test "starts a task" do
       task_sup_pid = start_supervised!({Task.Supervisor, name: UncatalogedTokenTransfers.TaskSupervisor})
-      start_supervised!({Sequence, [[ranges: [], step: -1], [name: :block_catchup_sequencer]]})
 
       state = %{task_ref: nil, block_numbers: [1]}
       assert {:noreply, %{task_ref: task_ref}} = UncatalogedTokenTransfers.handle_info(:push_front_blocks, state)

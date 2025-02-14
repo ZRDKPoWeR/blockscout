@@ -1,19 +1,24 @@
 defmodule BlockScoutWeb.Tokens.Instance.TransferController do
   use BlockScoutWeb, :controller
 
+  alias BlockScoutWeb.Tokens.Instance.Helper
   alias BlockScoutWeb.Tokens.TransferView
-  alias Explorer.{Chain, Market}
+  alias Explorer.Chain
   alias Explorer.Chain.Address
+  alias Explorer.Chain.Token.Instance
   alias Phoenix.View
 
   import BlockScoutWeb.Chain, only: [split_list_by_page: 1, paging_options: 1, next_page_params: 3]
+  import Explorer.Chain.SmartContract, only: [burn_address_hash_string: 0]
 
-  {:ok, burn_address_hash} = Chain.string_to_address_hash("0x0000000000000000000000000000000000000000")
+  {:ok, burn_address_hash} = Chain.string_to_address_hash(burn_address_hash_string())
   @burn_address_hash burn_address_hash
 
-  def index(conn, %{"token_id" => token_address_hash, "instance_id" => token_id, "type" => "JSON"} = params) do
+  def index(conn, %{"token_id" => token_address_hash, "instance_id" => token_id_string, "type" => "JSON"} = params) do
     with {:ok, hash} <- Chain.string_to_address_hash(token_address_hash),
          {:ok, token} <- Chain.token_from_address_hash(hash),
+         false <- Chain.erc_20_token?(token),
+         {token_id, ""} <- Integer.parse(token_id_string),
          token_transfers <-
            Chain.fetch_token_transfers_from_token_hash_and_token_id(hash, token_id, paging_options(params)) do
       {token_transfers_paginated, next_page} = split_list_by_page(token_transfers)
@@ -27,8 +32,8 @@ defmodule BlockScoutWeb.Tokens.Instance.TransferController do
             token_instance_transfer_path(
               conn,
               :index,
-              token_id,
               Address.checksum(token.contract_address_hash),
+              token_id,
               Map.delete(next_page_params, "type")
             )
         end
@@ -52,21 +57,17 @@ defmodule BlockScoutWeb.Tokens.Instance.TransferController do
     end
   end
 
-  def index(conn, %{"token_id" => token_address_hash, "instance_id" => token_id}) do
+  def index(conn, %{"token_id" => token_address_hash, "instance_id" => token_id_string}) do
     options = [necessity_by_association: %{[contract_address: :smart_contract] => :optional}]
 
     with {:ok, hash} <- Chain.string_to_address_hash(token_address_hash),
          {:ok, token} <- Chain.token_from_address_hash(hash, options),
-         {:ok, token_transfer} <-
-           Chain.erc721_token_instance_from_token_id_and_token_address(token_id, hash) do
-      render(
-        conn,
-        "index.html",
-        token_instance: token_transfer,
-        current_path: current_path(conn),
-        token: Market.add_price(token),
-        total_token_transfers: Chain.count_token_transfers_from_token_hash_and_token_id(hash, token_id)
-      )
+         false <- Chain.erc_20_token?(token),
+         {token_id, ""} <- Integer.parse(token_id_string) do
+      case Instance.nft_instance_by_token_id_and_token_address(token_id, hash) do
+        {:ok, token_instance} -> Helper.render(conn, token_instance, hash, token_id, token)
+        {:error, :not_found} -> Helper.render(conn, nil, hash, token_id, token)
+      end
     else
       _ ->
         not_found(conn)

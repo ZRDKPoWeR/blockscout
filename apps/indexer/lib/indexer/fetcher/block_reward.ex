@@ -6,7 +6,7 @@ defmodule Indexer.Fetcher.BlockReward do
   retrieved from the database and compared against that returned from `EthereumJSONRPC.`
   """
 
-  use Indexer.Fetcher
+  use Indexer.Fetcher, restart: :permanent
   use Spandex.Decorators
 
   require Logger
@@ -20,28 +20,23 @@ defmodule Indexer.Fetcher.BlockReward do
   alias Explorer.Chain.Cache.Accounts
   alias Indexer.{BufferedTask, Tracer}
   alias Indexer.Fetcher.BlockReward.Supervisor, as: BlockRewardSupervisor
-  alias Indexer.Fetcher.CoinBalance
-  alias Indexer.Transform.{AddressCoinBalances, AddressCoinBalancesDaily, Addresses}
+  alias Indexer.Fetcher.CoinBalance.Catchup, as: CoinBalanceCatchup
+  alias Indexer.Transform.{AddressCoinBalances, Addresses}
 
   @behaviour BufferedTask
 
-  @defaults [
-    flush_interval: :timer.seconds(3),
-    max_batch_size: 10,
-    max_concurrency: 4,
-    task_supervisor: Indexer.Fetcher.BlockReward.TaskSupervisor,
-    metadata: [fetcher: :block_reward]
-  ]
+  @default_max_batch_size 10
+  @default_max_concurrency 4
 
   @doc """
   Asynchronously fetches block rewards for each `t:Explorer.Chain.Explorer.block_number/0`` in `block_numbers`.
   """
-  @spec async_fetch([Block.block_number()]) :: :ok
-  def async_fetch(block_numbers) when is_list(block_numbers) do
+  @spec async_fetch([Block.block_number()], boolean()) :: :ok
+  def async_fetch(block_numbers, realtime?) when is_list(block_numbers) do
     if BlockRewardSupervisor.disabled?() do
       :ok
     else
-      BufferedTask.buffer(__MODULE__, block_numbers)
+      BufferedTask.buffer(__MODULE__, block_numbers, realtime?)
     end
   end
 
@@ -57,7 +52,7 @@ defmodule Indexer.Fetcher.BlockReward do
     end
 
     merged_init_options =
-      @defaults
+      defaults()
       |> Keyword.merge(mergeable_init_options)
       |> Keyword.put(:state, state)
 
@@ -67,9 +62,12 @@ defmodule Indexer.Fetcher.BlockReward do
   @impl BufferedTask
   def init(initial, reducer, _) do
     {:ok, final} =
-      Chain.stream_blocks_without_rewards(initial, fn %{number: number}, acc ->
-        reducer.(number, acc)
-      end)
+      Chain.stream_blocks_without_rewards(
+        initial,
+        fn %{number: number}, acc ->
+          reducer.(number, acc)
+        end
+      )
 
     final
   end
@@ -102,7 +100,7 @@ defmodule Indexer.Fetcher.BlockReward do
       {:error, reason} ->
         Logger.error(
           fn ->
-            ["failed to fetch: ", inspect(reason)]
+            ["failed to fetch: ", inspect(reason), " hash: ", inspect(hash_string_by_number)]
           end,
           error_count: consensus_number_count
         )
@@ -129,12 +127,13 @@ defmodule Indexer.Fetcher.BlockReward do
       beneficiaries_params ->
         beneficiaries_params
         |> add_gas_payments()
+        |> add_timestamp()
         |> import_block_reward_params()
         |> case do
           {:ok, %{address_coin_balances: address_coin_balances, addresses: addresses}} ->
             Accounts.drop(addresses)
 
-            CoinBalance.async_fetch_balances(address_coin_balances)
+            CoinBalanceCatchup.async_fetch_balances(address_coin_balances)
 
             retry_errors(errors)
 
@@ -186,6 +185,25 @@ defmodule Indexer.Fetcher.BlockReward do
     |> reduce_uncle_rewards()
   end
 
+  def add_timestamp(beneficiaries_params) do
+    timestamp_by_block_hash =
+      beneficiaries_params
+      |> Enum.map(& &1.block_hash)
+      |> Chain.timestamp_by_block_hash()
+
+    Enum.map(beneficiaries_params, fn %{block_hash: block_hash_str} = beneficiary ->
+      {:ok, block_hash} = Chain.string_to_block_hash(block_hash_str)
+
+      case timestamp_by_block_hash do
+        %{^block_hash => block_timestamp} ->
+          Map.put(beneficiary, :block_timestamp, block_timestamp)
+
+        _ ->
+          beneficiary
+      end
+    end)
+  end
+
   defp add_validator_rewards(beneficiaries_params) do
     gas_payment_by_block_hash =
       beneficiaries_params
@@ -195,18 +213,22 @@ defmodule Indexer.Fetcher.BlockReward do
 
     Enum.map(beneficiaries_params, fn %{block_hash: block_hash, address_type: address_type} = beneficiary ->
       if address_type == :validator do
-        case gas_payment_by_block_hash do
-          %{^block_hash => gas_payment} ->
-            {:ok, minted} = Wei.cast(beneficiary.reward)
-            %{beneficiary | reward: Wei.sum(minted, gas_payment)}
-
-          _ ->
-            beneficiary
-        end
+        beneficiary_with_reward(gas_payment_by_block_hash, block_hash, beneficiary)
       else
         beneficiary
       end
     end)
+  end
+
+  defp beneficiary_with_reward(gas_payment_by_block_hash, block_hash, beneficiary) do
+    case gas_payment_by_block_hash do
+      %{^block_hash => gas_payment} ->
+        {:ok, minted} = Wei.cast(beneficiary.reward)
+        %{beneficiary | reward: Wei.sum(minted, gas_payment)}
+
+      _ ->
+        beneficiary
+    end
   end
 
   def reduce_uncle_rewards(beneficiaries_params) do
@@ -214,22 +236,7 @@ defmodule Indexer.Fetcher.BlockReward do
     |> Enum.reduce([], fn %{address_type: address_type} = beneficiary, acc ->
       current =
         if address_type == :uncle do
-          reward =
-            Enum.reduce(beneficiaries_params, %Wei{value: 0}, fn %{
-                                                                   address_type: address_type,
-                                                                   address_hash: address_hash,
-                                                                   block_hash: block_hash
-                                                                 } = current_beneficiary,
-                                                                 reward_acc ->
-              if address_type == beneficiary.address_type && address_hash == beneficiary.address_hash &&
-                   block_hash == beneficiary.block_hash do
-                {:ok, minted} = Wei.cast(current_beneficiary.reward)
-
-                Wei.sum(reward_acc, minted)
-              else
-                reward_acc
-              end
-            end)
+          reward = get_reward(beneficiaries_params, beneficiary)
 
           %{beneficiary | reward: reward}
         else
@@ -241,17 +248,35 @@ defmodule Indexer.Fetcher.BlockReward do
     |> Enum.uniq()
   end
 
+  defp get_reward(beneficiaries_params, beneficiary) do
+    Enum.reduce(beneficiaries_params, %Wei{value: 0}, fn %{
+                                                           address_type: address_type,
+                                                           address_hash: address_hash,
+                                                           block_hash: block_hash
+                                                         } = current_beneficiary,
+                                                         reward_acc ->
+      reduce_uncle_rewards_inner(reward_acc, beneficiary, address_type, address_hash, block_hash, current_beneficiary)
+    end)
+  end
+
+  defp reduce_uncle_rewards_inner(reward_acc, beneficiary, address_type, address_hash, block_hash, current_beneficiary) do
+    if address_type == beneficiary.address_type && address_hash == beneficiary.address_hash &&
+         block_hash == beneficiary.block_hash do
+      {:ok, minted} = Wei.cast(current_beneficiary.reward)
+
+      Wei.sum(reward_acc, minted)
+    else
+      reward_acc
+    end
+  end
+
   defp import_block_reward_params(block_rewards_params) when is_list(block_rewards_params) do
     addresses_params = Addresses.extract_addresses(%{block_reward_contract_beneficiaries: block_rewards_params})
     address_coin_balances_params_set = AddressCoinBalances.params_set(%{beneficiary_params: block_rewards_params})
 
-    address_coin_balances_daily_params_set =
-      AddressCoinBalancesDaily.params_set(%{beneficiary_params: block_rewards_params})
-
     Chain.import(%{
       addresses: %{params: addresses_params},
       address_coin_balances: %{params: address_coin_balances_params_set},
-      address_coin_balances_daily: %{params: address_coin_balances_daily_params_set},
       block_rewards: %{params: block_rewards_params}
     })
   end
@@ -300,6 +325,16 @@ defmodule Indexer.Fetcher.BlockReward do
 
   defp fetched_beneficiary_error_to_iodata(%{code: code, message: message, data: %{block_quantity: block_quantity}})
        when is_integer(code) and is_binary(message) and is_binary(block_quantity) do
-    ["@", quantity_to_integer(block_quantity), ": (", to_string(code), ") ", message, ?\n]
+    ["@", block_quantity |> quantity_to_integer() |> to_string(), ": (", to_string(code), ") ", message, ?\n]
+  end
+
+  defp defaults do
+    [
+      flush_interval: :timer.seconds(3),
+      max_concurrency: Application.get_env(:indexer, __MODULE__)[:concurrency] || @default_max_concurrency,
+      max_batch_size: Application.get_env(:indexer, __MODULE__)[:batch_size] || @default_max_batch_size,
+      task_supervisor: Indexer.Fetcher.BlockReward.TaskSupervisor,
+      metadata: [fetcher: :block_reward]
+    ]
   end
 end

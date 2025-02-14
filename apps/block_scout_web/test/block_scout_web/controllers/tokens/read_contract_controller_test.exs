@@ -1,5 +1,11 @@
-defmodule BlockScoutWeb.Tokens.ReadContractControllerTest do
+defmodule BlockScoutWeb.Tokens.ContractControllerTest do
   use BlockScoutWeb.ConnCase, async: false
+
+  import Mox
+
+  alias Explorer.TestHelper
+
+  setup :verify_on_exit!
 
   describe "GET index/3" do
     test "with invalid address hash", %{conn: conn} do
@@ -34,7 +40,7 @@ defmodule BlockScoutWeb.Tokens.ReadContractControllerTest do
     test "successfully renders the page when the token is a verified smart contract", %{conn: conn} do
       token_contract_address = insert(:contract_address)
 
-      insert(:smart_contract, address_hash: token_contract_address.hash)
+      insert(:smart_contract, address_hash: token_contract_address.hash, contract_code_md5: "123")
 
       token = insert(:token, contract_address: token_contract_address)
 
@@ -50,6 +56,8 @@ defmodule BlockScoutWeb.Tokens.ReadContractControllerTest do
         token_contract_address: token_contract_address,
         token: token
       )
+
+      TestHelper.get_eip1967_implementation_zero_addresses()
 
       conn = get(conn, token_read_contract_path(BlockScoutWeb.Endpoint, :index, token.contract_address_hash))
 

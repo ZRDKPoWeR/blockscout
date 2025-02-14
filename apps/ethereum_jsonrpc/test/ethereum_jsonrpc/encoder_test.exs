@@ -27,6 +27,38 @@ defmodule EthereumJSONRPC.EncoderTest do
                "0x9507d39a000000000000000000000000000000000000000000000000000000000000000a"
     end
 
+    test "generates the correct encoding with string argument" do
+      function_selector = %ABI.FunctionSelector{
+        function: "isNewsletterCoverFullyClaimed",
+        input_names: ["newsletterId"],
+        inputs_indexed: nil,
+        return_names: [""],
+        returns: [:bool],
+        state_mutability: :view,
+        type: :function,
+        types: [:string]
+      }
+
+      assert Encoder.encode_function_call(function_selector, ["6564f5623e2a9f0001cb7fee"]) ==
+               "0xa07a712d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000183635363466353632336532613966303030316362376665650000000000000000"
+    end
+
+    test "generates the correct encoding with string started with 0x" do
+      function_selector = %ABI.FunctionSelector{
+        function: "isNewsletterCoverFullyClaimed",
+        input_names: ["newsletterId"],
+        inputs_indexed: nil,
+        return_names: [""],
+        returns: [:bool],
+        state_mutability: :view,
+        type: :function,
+        types: [:string]
+      }
+
+      assert Encoder.encode_function_call(function_selector, ["0x123"]) ==
+               "0xa07a712d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000053078313233000000000000000000000000000000000000000000000000000000"
+    end
+
     test "generates the correct encoding with addresses arguments" do
       function_selector = %ABI.FunctionSelector{
         function: "tokens",
@@ -76,6 +108,55 @@ defmodule EthereumJSONRPC.EncoderTest do
 
       assert Encoder.decode_result(result, selector) ==
                {"sum", {:error, "(-32602) Invalid params: Invalid hex: Invalid character 'x' at position 134."}}
+    end
+
+    test "correctly handles the blockchain error response with returning error as map without data" do
+      result = %{
+        error: %{
+          code: -32602,
+          message: "Invalid params: Invalid hex: Invalid character 'x' at position 134."
+        },
+        id: "sum",
+        jsonrpc: "2.0"
+      }
+
+      selector = %ABI.FunctionSelector{
+        function: "get",
+        returns: {:uint, 256},
+        types: [{:uint, 256}]
+      }
+
+      assert Encoder.decode_result(result, selector, true) ==
+               {"sum",
+                {:error,
+                 %{code: -32602, message: "Invalid params: Invalid hex: Invalid character 'x' at position 134."}}}
+    end
+
+    test "correctly handles the blockchain error response with returning error as map with data" do
+      result = %{
+        error: %{
+          code: -32602,
+          message: "Invalid params: Invalid hex: Invalid character 'x' at position 134.",
+          data: "0x01"
+        },
+        id: "sum",
+        jsonrpc: "2.0"
+      }
+
+      selector = %ABI.FunctionSelector{
+        function: "get",
+        returns: {:uint, 256},
+        types: [{:uint, 256}]
+      }
+
+      assert Encoder.decode_result(result, selector, true) ==
+               {"sum",
+                {:error,
+                 %{
+                   code: -32602,
+                   message: "Invalid params: Invalid hex: Invalid character 'x' at position 134.",
+                   data: "0x01"
+                 }}}
     end
 
     test "correctly decodes string types" do
