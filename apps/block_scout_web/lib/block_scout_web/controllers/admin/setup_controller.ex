@@ -1,7 +1,8 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.Admin.SetupController do
   use BlockScoutWeb, :controller
 
-  import BlockScoutWeb.AdminRouter.Helpers
+  import BlockScoutWeb.Routers.AdminRouter.Helpers
 
   alias BlockScoutWeb.Endpoint
   alias Explorer.Accounts.User.Registration

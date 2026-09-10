@@ -1,214 +1,235 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 # This file is responsible for configuring your application
-# and its dependencies with the aid of the Mix.Config module.
+# and its dependencies with the aid of the Config module.
 #
 # This configuration file is loaded before any dependency and
 # is restricted to this project.
-use Mix.Config
+import Config
+
+[__DIR__ | ~w(.. .. .. config config_helper.exs)]
+|> Path.join()
+|> Code.eval_file()
 
 # General application configuration
 config :explorer,
-  ecto_repos: [Explorer.Repo],
-  coin: System.get_env("COIN") || "POA",
-  coingecko_coin_id: System.get_env("COINGECKO_COIN_ID"),
+  chain_type: ConfigHelper.chain_type(),
+  chain_identity: ConfigHelper.chain_identity(),
+  ecto_repos: ConfigHelper.repos(),
   token_functions_reader_max_retries: 3,
-  allowed_evm_versions:
-    System.get_env("ALLOWED_EVM_VERSIONS") ||
-      "homestead,tangerineWhistle,spuriousDragon,byzantium,constantinople,petersburg,istanbul,default",
-  include_uncles_in_average_block_time:
-    if(System.get_env("UNCLES_IN_AVERAGE_BLOCK_TIME") == "true", do: true, else: false),
-  healthy_blocks_period: System.get_env("HEALTHY_BLOCKS_PERIOD") || :timer.minutes(5),
-  realtime_events_sender:
-    if(System.get_env("DISABLE_WEBAPP") != "true",
-      do: Explorer.Chain.Events.SimpleSender,
-      else: Explorer.Chain.Events.DBSender
-    )
+  # for not fully indexed blockchains
+  decode_not_a_contract_calls: ConfigHelper.parse_bool_env_var("DECODE_NOT_A_CONTRACT_CALLS")
 
-config :explorer, Explorer.Counters.AverageBlockTime,
+config :explorer, Explorer.ChainSpec.GenesisData, enabled: true
+
+config :explorer, Explorer.Chain.Cache.BlockNumber, enabled: true
+
+config :explorer, Explorer.Chain.Cache.ContractMethods, enabled: true
+
+config :explorer, Explorer.Chain.Cache.Counters.AddressesCoinBalanceSum,
   enabled: true,
-  period: :timer.minutes(10)
+  ttl_check_interval: :timer.seconds(1)
 
-config :explorer, Explorer.Chain.Events.Listener,
-  enabled:
-    if(System.get_env("DISABLE_WEBAPP") == nil && System.get_env("DISABLE_INDEXER") == nil,
-      do: false,
-      else: true
-    )
-
-config :explorer, Explorer.ChainSpec.GenesisData,
+config :explorer, Explorer.Chain.Cache.Counters.AddressesCoinBalanceSumMinusBurnt,
   enabled: true,
-  chain_spec_path: System.get_env("CHAIN_SPEC_PATH"),
-  emission_format: System.get_env("EMISSION_FORMAT", "DEFAULT"),
-  rewards_contract_address: System.get_env("REWARDS_CONTRACT", "0xeca443e8e1ab29971a45a9c57a6a9875701698a5")
+  ttl_check_interval: :timer.seconds(1)
 
-config :explorer, Explorer.Chain.Cache.BlockNumber,
+config :explorer, Explorer.Chain.Cache.Counters.AddressesCount,
   enabled: true,
-  ttl_check_interval: if(System.get_env("DISABLE_INDEXER") == "true", do: :timer.seconds(1), else: false),
-  global_ttl: if(System.get_env("DISABLE_INDEXER") == "true", do: :timer.seconds(5))
+  enable_consolidation: true
 
-address_sum_global_ttl =
-  "ADDRESS_SUM_CACHE_PERIOD"
-  |> System.get_env("")
-  |> Integer.parse()
-  |> case do
-    {integer, ""} -> :timer.seconds(integer)
-    _ -> :timer.minutes(60)
-  end
+config :explorer, Explorer.Chain.Cache.Counters.AddressCounters, enabled: true
 
-config :explorer, Explorer.Chain.Cache.AddressSum,
+config :explorer, Explorer.Chain.Cache.Counters.AddressCountersConsolidator, enabled: true
+
+config :explorer, Explorer.Chain.Cache.Counters.AddressTokensUsdSum,
   enabled: true,
-  ttl_check_interval: :timer.seconds(1),
-  global_ttl: address_sum_global_ttl
+  enable_consolidation: true
 
-config :explorer, Explorer.Chain.Cache.AddressSumMinusBurnt,
-  enabled: true,
-  ttl_check_interval: :timer.seconds(1),
-  global_ttl: address_sum_global_ttl
+update_interval_in_milliseconds_default = 30 * 60 * 1000
 
-balances_update_interval =
-  if System.get_env("ADDRESS_WITH_BALANCES_UPDATE_INTERVAL") do
-    case Integer.parse(System.get_env("ADDRESS_WITH_BALANCES_UPDATE_INTERVAL")) do
-      {integer, ""} -> integer
-      _ -> nil
-    end
-  end
-
-config :explorer, Explorer.Counters.AddressesWithBalanceCounter,
-  enabled: false,
-  enable_consolidation: true,
-  update_interval_in_seconds: balances_update_interval || 30 * 60
-
-config :explorer, Explorer.Counters.AddressesCounter,
+config :explorer, Explorer.Chain.Cache.Counters.ContractsCount,
   enabled: true,
   enable_consolidation: true,
-  update_interval_in_seconds: balances_update_interval || 30 * 60
+  update_interval_in_milliseconds: update_interval_in_milliseconds_default
 
-config :explorer, Explorer.Counters.AddressTransactionsGasUsageCounter,
+config :explorer, Explorer.Chain.Cache.Counters.NewContractsCount,
+  enabled: true,
+  enable_consolidation: true,
+  update_interval_in_milliseconds: update_interval_in_milliseconds_default
+
+config :explorer, Explorer.Chain.Cache.Counters.VerifiedContractsCount,
+  enabled: true,
+  enable_consolidation: true,
+  update_interval_in_milliseconds: update_interval_in_milliseconds_default
+
+config :explorer, Explorer.Chain.Cache.Counters.NewVerifiedContractsCount,
+  enabled: true,
+  enable_consolidation: true,
+  update_interval_in_milliseconds: update_interval_in_milliseconds_default
+
+config :explorer, Explorer.Chain.Cache.Counters.WithdrawalsSum,
+  enabled: true,
+  enable_consolidation: true,
+  update_interval_in_milliseconds: update_interval_in_milliseconds_default
+
+config :explorer, Explorer.Chain.Cache.Counters.Stability.ValidatorsCount,
+  enabled: true,
+  enable_consolidation: true,
+  update_interval_in_milliseconds: update_interval_in_milliseconds_default
+
+config :explorer, Explorer.Chain.Cache.Counters.Blackfort.ValidatorsCount,
+  enabled: true,
+  enable_consolidation: true,
+  update_interval_in_milliseconds: update_interval_in_milliseconds_default
+
+config :explorer, Explorer.Market.Fetcher.Token, enabled: true
+
+config :explorer, Explorer.Chain.Cache.Counters.TokenCounters, enabled: true
+
+config :explorer, Explorer.Chain.Cache.Counters.TokenCountersConsolidator, enabled: true
+
+config :explorer, Explorer.Chain.Cache.Counters.BlockBurntFeeCount,
   enabled: true,
   enable_consolidation: true
 
-config :explorer, Explorer.Counters.AddressTokenUsdSum,
+config :explorer, Explorer.Chain.Cache.Counters.BlockPriorityFeeCount,
   enabled: true,
   enable_consolidation: true
 
-config :explorer, Explorer.Chain.Cache.TokenExchangeRate,
-  enabled: true,
-  enable_consolidation: true
+config :explorer, Explorer.TokenInstanceOwnerAddressMigration.Supervisor, enabled: true
 
-config :explorer, Explorer.Counters.TokenHoldersCounter,
-  enabled: true,
-  enable_consolidation: true
+config :explorer, Explorer.Migrator.DeleteZeroValueInternalTransactions, enabled: false
 
-config :explorer, Explorer.Counters.TokenTransfersCounter,
-  enabled: true,
-  enable_consolidation: true
+config :explorer, Explorer.Chain.Mud, enabled: ConfigHelper.parse_bool_env_var("MUD_INDEXER_ENABLED")
 
-config :explorer, Explorer.Counters.AddressTransactionsCounter,
-  enabled: true,
-  enable_consolidation: true
+config :explorer, Explorer.Utility.VersionConstantsUpdater, enabled: true
 
-bridge_market_cap_update_interval =
-  if System.get_env("BRIDGE_MARKET_CAP_UPDATE_INTERVAL") do
-    case Integer.parse(System.get_env("BRIDGE_MARKET_CAP_UPDATE_INTERVAL")) do
-      {integer, ""} -> integer
-      _ -> nil
-    end
-  end
+config :explorer, Explorer.Utility.VersionUpgrade, enabled: true
 
-config :explorer, Explorer.Counters.Bridge,
-  enabled: if(System.get_env("SUPPLY_MODULE") === "TokenBridge", do: true, else: false),
-  enable_consolidation: System.get_env("DISABLE_BRIDGE_MARKET_CAP_UPDATER") !== "true",
-  update_interval_in_seconds: bridge_market_cap_update_interval || 30 * 60,
-  disable_lp_tokens_in_market_cap: System.get_env("DISABLE_LP_TOKENS_IN_MARKET_CAP") == "true"
+for migrator <- [
+      # Background migrations
+      Explorer.Migrator.TransactionsDenormalization,
+      Explorer.Migrator.AddressCurrentTokenBalanceTokenType,
+      Explorer.Migrator.AddressTokenBalanceTokenType,
+      Explorer.Migrator.SanitizeMissingBlockRanges,
+      Explorer.Migrator.SanitizeIncorrectNFTTokenTransfers,
+      Explorer.Migrator.TokenTransferTokenType,
+      Explorer.Migrator.SanitizeIncorrectWETHTokenTransfers,
+      Explorer.Migrator.TransactionBlockConsensus,
+      Explorer.Migrator.TokenTransferBlockConsensus,
+      Explorer.Migrator.RestoreOmittedWETHTransfers,
+      Explorer.Migrator.SanitizeMissingTokenBalances,
+      Explorer.Migrator.SanitizeReplacedTransactions,
+      Explorer.Migrator.ReindexInternalTransactionsWithIncompatibleStatus,
+      Explorer.Migrator.SanitizeDuplicatedLogIndexLogs,
+      Explorer.Migrator.RefetchContractCodes,
+      Explorer.Migrator.BackfillMultichainSearchDB,
+      Explorer.Migrator.SanitizeVerifiedAddresses,
+      Explorer.Migrator.SanitizeEmptyContractCodeAddresses,
+      Explorer.Migrator.BackfillMetadataURL,
+      Explorer.Migrator.SanitizeErc1155TokenBalancesWithoutTokenIds,
+      Explorer.Migrator.MergeAdjacentMissingBlockRanges,
+      Explorer.Migrator.UnescapeQuotesInTokens,
+      Explorer.Migrator.UnescapeAmpersandsInTokens,
+      Explorer.Migrator.SanitizeDuplicateSmartContractAdditionalSources,
+      Explorer.Migrator.ReindexBlocksWithUncatalogedTokenTransfers,
+      Explorer.Migrator.EmptyInternalTransactionsData,
+      Explorer.Migrator.FillInternalTransactionsAddressIds,
+      Explorer.Migrator.BackfillAddressCounters,
+      Explorer.Migrator.BackfillTokenCounters
+    ] do
+  config :explorer, migrator, enabled: true
+end
 
-config :explorer, Explorer.ExchangeRates, enabled: System.get_env("DISABLE_EXCHANGE_RATES") != "true", store: :ets
+for index_operation <- [
+      # Heavy DB index operations
+      Explorer.Migrator.HeavyDbIndexOperation.CreateLogsBlockHashIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropLogsBlockNumberAscIndexAscIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateLogsAddressHashBlockNumberDescIndexDescIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropLogsAddressHashIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropLogsAddressHashTransactionHashIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropLogsIndexIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateLogsAddressHashFirstTopicBlockNumberIndexIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropInternalTransactionsFromAddressHashIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateInternalTransactionsBlockNumberDescTransactionIndexDescIndexDescIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropTokenTransfersBlockNumberAscLogIndexAscIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropTokenTransfersFromAddressHashTransactionHashIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropTokenTransfersToAddressHashTransactionHashIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropTokenTransfersTokenContractAddressHashTransactionHashIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropTokenTransfersBlockNumberIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateAddressesVerifiedIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropAddressesVerifiedIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateAddressesVerifiedHashIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateAddressesVerifiedTransactionsCountDescHashIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateAddressesVerifiedFetchedCoinBalanceDescHashIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateSmartContractsLanguageIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropTransactionsCreatedContractAddressHashWithPendingIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropTransactionsFromAddressHashWithPendingIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropTransactionsToAddressHashWithPendingIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateLogsDepositsWithdrawalsIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateAddressesTransactionsCountDescPartialIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateAddressesTransactionsCountAscCoinBalanceDescHashPartialIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateInternalTransactionsBlockNumberTransactionIndexIndexUniqueIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.ValidateInternalTransactionsBlockNumberTransactionIndexNotNull,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateSmartContractAdditionalSourcesUniqueIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropTokenInstancesTokenIdIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateTokensNamePartialFtsIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateTransactionsCreatedContractAddressHashWPendingIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropTransactionsCreatedContractAddressHashWithPendingIndexA,
+      Explorer.Migrator.HeavyDbIndexOperation.UpdateInternalTransactionsPrimaryKey,
+      Explorer.Migrator.HeavyDbIndexOperation.DropInternalTransactionsBlockHashTransactionIndexIndexIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropInternalTransactionsCreatedContractAddressHashPartialIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateInternalTransactionsFromAddressIdPartialIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateInternalTransactionsToAddressIdPartialIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateInternalTransactionsCreatedContractAddressIdIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateInternalTransactionsBlockNumberCreatedContractAddressIdPartialIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.RemoveInternalTransactionsBlockHashTransactionHashBlockIndexError,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateAddressesHashContractCodeNotNullIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropInternalTransactionsBlockNumberCreatedContractAddressHashIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropInternalTransactionsCreatedContractAddressHashIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropInternalTransactionsFromAddressHashPartialIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.DropInternalTransactionsToAddressHashPartialIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateLogsAddressHashFirstTopicSecondTopicBlockNumberIndex,
+      Explorer.Migrator.HeavyDbIndexOperation.CreateAddressCurrentTokenBalancesAddressHashBlockNumberIndex
+    ] do
+  config :explorer, index_operation, enabled: true
+end
 
-config :explorer, Explorer.KnownTokens, enabled: System.get_env("DISABLE_KNOWN_TOKENS") != "true", store: :ets
+config :explorer, Explorer.Chain.Fetcher.CheckBytecodeMatchingOnDemand, enabled: true
+
+config :explorer, Explorer.Chain.Fetcher.FetchValidatorInfoOnDemand, enabled: true
 
 config :explorer, Explorer.Integrations.EctoLogger, query_time_ms_threshold: :timer.seconds(2)
 
-config :explorer, Explorer.Market.History.Cataloger, enabled: System.get_env("DISABLE_INDEXER") != "true"
+config :explorer, Explorer.Tags.AddressTag.Cataloger, enabled: true
 
-txs_stats_init_lag =
-  System.get_env("TXS_HISTORIAN_INIT_LAG", "0")
-  |> Integer.parse()
-  |> elem(0)
-  |> :timer.minutes()
+config :explorer, Explorer.SmartContract.CertifiedSmartContractCataloger, enabled: true
 
-txs_stats_days_to_compile_at_init =
-  System.get_env("TXS_STATS_DAYS_TO_COMPILE_AT_INIT", "40")
-  |> Integer.parse()
-  |> elem(0)
+config :explorer, Explorer.Utility.RateLimiter, enabled: true
 
-config :explorer, Explorer.Chain.Transaction.History.Historian,
-  enabled: System.get_env("ENABLE_TXS_STATS", "false") != "false",
-  init_lag: txs_stats_init_lag,
-  days_to_compile_at_init: txs_stats_days_to_compile_at_init
+config :explorer, Explorer.Utility.Hammer.Redis, enabled: true
+config :explorer, Explorer.Utility.Hammer.ETS, enabled: true
 
-history_fetch_interval =
-  case Integer.parse(System.get_env("HISTORY_FETCH_INTERVAL", "")) do
-    {mins, ""} -> mins
-    _ -> 60
-  end
-  |> :timer.minutes()
+config :explorer, Explorer.Chain.Health.Monitor, enabled: true
 
-config :explorer, Explorer.History.Process, history_fetch_interval: history_fetch_interval
-
-config :explorer, Explorer.Repo, migration_timestamps: [type: :utc_datetime_usec]
+config :explorer, Explorer.Repo,
+  migration_timestamps: [type: :utc_datetime_usec],
+  disconnect_on_error_codes: [:query_canceled]
 
 config :explorer, Explorer.Tracer,
   service: :explorer,
   adapter: SpandexDatadog.Adapter,
   trace_key: :blockscout
 
-if System.get_env("METADATA_CONTRACT") && System.get_env("VALIDATORS_CONTRACT") do
-  config :explorer, Explorer.Validator.MetadataRetriever,
-    metadata_contract_address: System.get_env("METADATA_CONTRACT"),
-    validators_contract_address: System.get_env("VALIDATORS_CONTRACT")
-
-  config :explorer, Explorer.Validator.MetadataProcessor, enabled: System.get_env("DISABLE_INDEXER") != "true"
-else
-  config :explorer, Explorer.Validator.MetadataProcessor, enabled: false
-end
-
-config :explorer, Explorer.Chain.Block.Reward,
-  validators_contract_address: System.get_env("VALIDATORS_CONTRACT"),
-  keys_manager_contract_address: System.get_env("KEYS_MANAGER_CONTRACT")
-
-if System.get_env("POS_STAKING_CONTRACT") do
-  config :explorer, Explorer.Staking.ContractState,
-    enabled: true,
-    staking_contract_address: System.get_env("POS_STAKING_CONTRACT"),
-    eth_subscribe_max_delay: System.get_env("POS_ETH_SUBSCRIBE_MAX_DELAY", "60"),
-    eth_blocknumber_pull_interval: System.get_env("POS_ETH_BLOCKNUMBER_PULL_INTERVAL", "500")
-else
-  config :explorer, Explorer.Staking.ContractState, enabled: false
-end
-
-case System.get_env("SUPPLY_MODULE") do
-  "TokenBridge" ->
-    config :explorer, supply: Explorer.Chain.Supply.TokenBridge
-
-  "rsk" ->
-    config :explorer, supply: Explorer.Chain.Supply.RSK
-
-  _ ->
-    :ok
-end
-
-if System.get_env("SOURCE_MODULE") == "TokenBridge" do
-  config :explorer, Explorer.ExchangeRates.Source, source: Explorer.ExchangeRates.Source.TokenBridge
-end
-
 config :explorer,
-  solc_bin_api_url: "https://solc-bin.ethereum.org",
-  checksum_function: System.get_env("CHECKSUM_FUNCTION") && String.to_atom(System.get_env("CHECKSUM_FUNCTION"))
+  solc_bin_api_url: "https://binaries.soliditylang.org"
+
+config :explorer, :http_client, Explorer.HttpClient.Tesla
+
+config :explorer, Explorer.Chain.BridgedToken, enabled: ConfigHelper.parse_bool_env_var("BRIDGED_TOKENS_ENABLED")
 
 config :logger, :explorer,
-  # keep synced with `config/config.exs`
-  format: "$dateT$time $metadata[$level] $message\n",
-  metadata:
-    ~w(application fetcher request_id first_block_number last_block_number missing_block_range_count missing_block_count
-       block_number step count error_count shrunk import_id transaction_id)a,
+  metadata: ConfigHelper.logger_metadata(),
   metadata_filter: [application: :explorer]
 
 config :spandex_ecto, SpandexEcto.EctoLogger,
@@ -216,37 +237,8 @@ config :spandex_ecto, SpandexEcto.EctoLogger,
   tracer: Explorer.Tracer,
   otp_app: :explorer
 
-config :explorer, Explorer.Chain.Cache.Blocks,
-  ttl_check_interval: if(System.get_env("DISABLE_INDEXER") == "true", do: :timer.seconds(1), else: false),
-  global_ttl: if(System.get_env("DISABLE_INDEXER") == "true", do: :timer.seconds(5))
-
-config :explorer, Explorer.Chain.Cache.Transactions,
-  ttl_check_interval: if(System.get_env("DISABLE_INDEXER") == "true", do: :timer.seconds(1), else: false),
-  global_ttl: if(System.get_env("DISABLE_INDEXER") == "true", do: :timer.seconds(5))
-
-config :explorer, Explorer.Chain.Cache.Accounts,
-  ttl_check_interval: if(System.get_env("DISABLE_INDEXER") == "true", do: :timer.seconds(1), else: false),
-  global_ttl: if(System.get_env("DISABLE_INDEXER") == "true", do: :timer.seconds(5))
-
-config :explorer, Explorer.Chain.Cache.PendingTransactions,
-  enabled:
-    if(System.get_env("ETHEREUM_JSONRPC_VARIANT") == "besu",
-      do: false,
-      else: true
-    ),
-  ttl_check_interval: if(System.get_env("DISABLE_INDEXER") == "true", do: :timer.seconds(1), else: false),
-  global_ttl: if(System.get_env("DISABLE_INDEXER") == "true", do: :timer.seconds(5))
-
-config :explorer, Explorer.Chain.Cache.Uncles,
-  ttl_check_interval: if(System.get_env("DISABLE_INDEXER") == "true", do: :timer.seconds(1), else: false),
-  global_ttl: if(System.get_env("DISABLE_INDEXER") == "true", do: :timer.seconds(5))
-
-config :explorer, Explorer.ThirdPartyIntegrations.Sourcify,
-  server_url: System.get_env("SOURCIFY_SERVER_URL") || "https://sourcify.dev/server",
-  enabled: System.get_env("ENABLE_SOURCIFY_INTEGRATION") == "true",
-  chain_id: System.get_env("CHAIN_ID"),
-  repo_url: System.get_env("SOURCIFY_REPO_URL") || "https://repo.sourcify.dev/contracts/full_match/"
+config :tesla, adapter: Tesla.Adapter.Mint
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
-import_config "#{Mix.env()}.exs"
+import_config "#{config_env()}.exs"

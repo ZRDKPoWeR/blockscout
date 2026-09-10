@@ -1,19 +1,50 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.AddressController do
   use BlockScoutWeb, :controller
+  use Utils.CompileTimeEnvHelper, chain_type: [:explorer, :chain_type]
+
+  import BlockScoutWeb.Account.AuthController, only: [current_user: 1]
 
   import BlockScoutWeb.Chain, only: [paging_options: 1, next_page_params: 3, split_list_by_page: 1]
 
-  alias BlockScoutWeb.{AccessHelpers, AddressView}
-  alias Explorer.Counters.{AddressTransactionsCounter, AddressTransactionsGasUsageCounter}
+  import BlockScoutWeb.Models.GetAddressTags, only: [get_address_tags: 2]
+
+  alias BlockScoutWeb.{
+    AccessHelper,
+    AddressTransactionController,
+    AddressView,
+    Controller
+  }
+
   alias Explorer.{Chain, Market}
-  alias Explorer.ExchangeRates.Token
+  alias Explorer.Chain.{Address, Wei}
+  alias Explorer.Chain.Address.Counters
+  alias Explorer.Chain.Cache.Counters.{AddressCounters, AddressesCount}
+  alias Indexer.Fetcher.OnDemand.CoinBalance, as: CoinBalanceOnDemand
+  alias Indexer.Fetcher.OnDemand.ContractCode, as: ContractCodeOnDemand
   alias Phoenix.View
+
+  case @chain_type do
+    :filecoin ->
+      @contract_address_preloads [
+        :smart_contract,
+        [contract_creation_transaction: :from_address]
+      ]
+
+    _ ->
+      @contract_address_preloads [
+        :smart_contract,
+        :contract_creation_transaction
+      ]
+  end
+
+  @api_true [api?: true]
 
   def index(conn, %{"type" => "JSON"} = params) do
     addresses =
       params
       |> paging_options()
-      |> Chain.list_top_addresses()
+      |> Address.list_top_addresses()
 
     {addresses_page, next_page} = split_list_by_page(addresses)
 
@@ -30,7 +61,7 @@ defmodule BlockScoutWeb.AddressController do
           )
       end
 
-    exchange_rate = Market.get_exchange_rate(Explorer.coin()) || Token.null()
+    exchange_rate = Market.get_coin_exchange_rate()
     total_supply = Chain.total_supply()
 
     items_count_str = Map.get(params, "items_count")
@@ -46,7 +77,7 @@ defmodule BlockScoutWeb.AddressController do
     items =
       addresses_page
       |> Enum.with_index(1)
-      |> Enum.map(fn {{address, tx_count}, index} ->
+      |> Enum.map(fn {address, index} ->
         View.render_to_string(
           AddressView,
           "_tile.html",
@@ -54,7 +85,7 @@ defmodule BlockScoutWeb.AddressController do
           index: items_count + index,
           exchange_rate: exchange_rate,
           total_supply: total_supply,
-          tx_count: tx_count
+          transaction_count: address.transactions_count
         )
       end)
 
@@ -71,73 +102,102 @@ defmodule BlockScoutWeb.AddressController do
     total_supply = Chain.total_supply()
 
     render(conn, "index.html",
-      current_path: current_path(conn),
-      address_count: Chain.address_estimated_count(),
+      current_path: Controller.current_full_path(conn),
+      address_count: AddressesCount.fetch(),
       total_supply: total_supply
     )
   end
 
-  def show(conn, %{"id" => id}) do
-    redirect(conn, to: AccessHelpers.get_path(conn, :address_transaction_path, :index, id))
+  def show(conn, %{"id" => address_hash_string, "type" => "JSON"} = params) do
+    AddressTransactionController.index(conn, Map.put(params, "address_id", address_hash_string))
+  end
+
+  def show(conn, %{"id" => address_hash_string} = params) do
+    ip = AccessHelper.conn_to_ip_string(conn)
+
+    with {:ok, address_hash} <- Chain.string_to_address_hash(address_hash_string),
+         {:ok, address} <- Chain.hash_to_address(address_hash),
+         {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params) do
+      fully_preloaded_address =
+        Address.maybe_preload_smart_contract_associations(address, @contract_address_preloads, @api_true)
+
+      ContractCodeOnDemand.trigger_fetch(ip, fully_preloaded_address)
+
+      render(
+        conn,
+        "_show_address_transactions.html",
+        address: fully_preloaded_address,
+        coin_balance_status: CoinBalanceOnDemand.trigger_fetch(ip, address),
+        exchange_rate: Market.get_coin_exchange_rate(),
+        filter: params["filter"],
+        counters_path: address_path(conn, :address_counters, %{"id" => address_hash_string}),
+        current_path: Controller.current_full_path(conn),
+        tags: get_address_tags(address_hash, current_user(conn))
+      )
+    else
+      :error ->
+        unprocessable_entity(conn)
+
+      {:restricted_access, _} ->
+        not_found(conn)
+
+      {:error, :not_found} ->
+        {:ok, address_hash} = Chain.string_to_address_hash(address_hash_string)
+
+        address = %Chain.Address{
+          hash: address_hash,
+          smart_contract: nil,
+          token: nil,
+          fetched_coin_balance: %Wei{value: Decimal.new(0)}
+        }
+
+        case Chain.Hash.Address.validate(address_hash_string) do
+          {:ok, _} ->
+            ContractCodeOnDemand.trigger_fetch(ip, address)
+
+            render(
+              conn,
+              "_show_address_transactions.html",
+              address: address,
+              coin_balance_status: CoinBalanceOnDemand.trigger_fetch(ip, address),
+              exchange_rate: Market.get_coin_exchange_rate(),
+              filter: params["filter"],
+              counters_path: address_path(conn, :address_counters, %{"id" => address_hash_string}),
+              current_path: Controller.current_full_path(conn),
+              tags: get_address_tags(address_hash, current_user(conn))
+            )
+
+          _ ->
+            not_found(conn)
+        end
+    end
   end
 
   def address_counters(conn, %{"id" => address_hash_string}) do
     with {:ok, address_hash} <- Chain.string_to_address_hash(address_hash_string),
          {:ok, address} <- Chain.hash_to_address(address_hash) do
-      {transaction_count, gas_usage_count, validation_count} = transaction_and_validation_count(address)
+      validation_count = Counters.address_to_validation_count(address.hash, [])
+
+      %{
+        transactions_count: transactions_count,
+        token_transfers_count: token_transfers_count,
+        gas_used: gas_used
+      } = AddressCounters.fetch(address)
 
       json(conn, %{
-        transaction_count: transaction_count,
-        gas_usage_count: gas_usage_count,
+        transaction_count: transactions_count,
+        token_transfer_count: token_transfers_count,
+        gas_usage_count: gas_used,
         validation_count: validation_count
       })
     else
-      _ -> not_found(conn)
+      _ ->
+        json(conn, %{
+          transaction_count: 0,
+          token_transfer_count: 0,
+          gas_usage_count: 0,
+          validation_count: 0
+        })
     end
-  end
-
-  defp transaction_and_validation_count(address) do
-    transaction_count_task =
-      Task.async(fn ->
-        transaction_count(address)
-      end)
-
-    gas_usage_count_task =
-      Task.async(fn ->
-        gas_usage_count(address)
-      end)
-
-    validation_count_task =
-      Task.async(fn ->
-        validation_count(address)
-      end)
-
-    [transaction_count_task, gas_usage_count_task, validation_count_task]
-    |> Task.yield_many(:timer.seconds(60))
-    |> Enum.map(fn {_task, res} ->
-      case res do
-        {:ok, result} ->
-          result
-
-        {:exit, reason} ->
-          raise "Query fetching address counters terminated: #{inspect(reason)}"
-
-        nil ->
-          raise "Query fetching address counters timed out."
-      end
-    end)
-    |> List.to_tuple()
-  end
-
-  def transaction_count(address) do
-    AddressTransactionsCounter.fetch(address)
-  end
-
-  def gas_usage_count(address) do
-    AddressTransactionsGasUsageCounter.fetch(address)
-  end
-
-  defp validation_count(address) do
-    Chain.address_to_validation_count(address.hash)
   end
 end

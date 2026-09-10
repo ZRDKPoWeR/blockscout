@@ -1,9 +1,13 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Chain.TokenTransferTest do
   use Explorer.DataCase
 
+  use Utils.CompileTimeEnvHelper,
+    chain_identity: [:explorer, :chain_identity]
+
   import Explorer.Factory
 
-  alias Explorer.{PagingOptions, Repo}
+  alias Explorer.PagingOptions
   alias Explorer.Chain.TokenTransfer
 
   doctest Explorer.Chain.TokenTransfer
@@ -143,56 +147,6 @@ defmodule Explorer.Chain.TokenTransferTest do
         |> Enum.map(&{&1.transaction_hash, &1.log_index})
 
       assert token_transfers_primary_keys_paginated == [{token_transfer.transaction_hash, token_transfer.log_index}]
-    end
-  end
-
-  describe "address_to_unique_tokens/2" do
-    test "returns list of unique tokens for a token contract" do
-      token_contract_address = insert(:contract_address)
-      token = insert(:token, contract_address: token_contract_address, type: "ERC-721")
-
-      transaction =
-        :transaction
-        |> insert()
-        |> with_block(insert(:block, number: 1))
-
-      insert(
-        :token_instance,
-        token_id: 42,
-        token_contract_address_hash: token_contract_address.hash
-      )
-
-      insert(
-        :token_transfer,
-        to_address: build(:address),
-        transaction: transaction,
-        token_contract_address: token_contract_address,
-        token: token,
-        token_id: 42
-      )
-
-      another_transaction =
-        :transaction
-        |> insert()
-        |> with_block(insert(:block, number: 3))
-
-      last_owner =
-        insert(
-          :token_transfer,
-          to_address: build(:address),
-          transaction: another_transaction,
-          token_contract_address: token_contract_address,
-          token: token,
-          token_id: 42
-        )
-
-      results =
-        token_contract_address.hash
-        |> TokenTransfer.address_to_unique_tokens()
-        |> Repo.all()
-
-      assert Enum.map(results, & &1.token_id) == [last_owner.token_id]
-      assert Enum.map(results, & &1.to_address_hash) == [last_owner.to_address_hash]
     end
   end
 
@@ -373,6 +327,139 @@ defmodule Explorer.Chain.TokenTransferTest do
         })
 
       assert Enum.member?(page_two, transaction_one_bytes) == true
+    end
+  end
+
+  describe "uncataloged_token_transfer_block_numbers/2" do
+    test "returns a list of block numbers" do
+      block = insert(:block)
+      address = insert(:address)
+
+      log =
+        insert(:token_transfer_log,
+          transaction:
+            insert(:transaction,
+              block_number: block.number,
+              block_hash: block.hash,
+              cumulative_gas_used: 0,
+              gas_used: 0,
+              index: 0
+            ),
+          block: block,
+          address_hash: address.hash,
+          address: address
+        )
+
+      block_number = log.block_number
+      assert [^block_number] = TokenTransfer.uncataloged_token_transfer_block_numbers(block_number, block_number)
+    end
+
+    test "does not return block numbers outside the given range" do
+      block = insert(:block)
+      address = insert(:address)
+
+      log =
+        insert(:token_transfer_log,
+          transaction:
+            insert(:transaction,
+              block_number: block.number,
+              block_hash: block.hash,
+              cumulative_gas_used: 0,
+              gas_used: 0,
+              index: 0
+            ),
+          block: block,
+          address_hash: address.hash,
+          address: address
+        )
+
+      block_number = log.block_number
+      assert [] = TokenTransfer.uncataloged_token_transfer_block_numbers(block_number + 1, block_number + 100)
+      assert [] = TokenTransfer.uncataloged_token_transfer_block_numbers(max(block_number - 100, 0), block_number - 1)
+    end
+  end
+
+  if @chain_identity == {:optimism, :celo} do
+    test "returns block numbers for Celo epoch blocks with nil transaction_hash" do
+      log =
+        insert(:token_transfer_log,
+          transaction: nil,
+          transaction_hash: nil
+        )
+
+      block_number = log.block_number
+      assert [^block_number] = TokenTransfer.uncataloged_token_transfer_block_numbers(block_number, block_number)
+    end
+
+    test "does not return block numbers when matching token transfer exists for Celo epoch blocks" do
+      log =
+        insert(:token_transfer_log,
+          transaction: nil,
+          transaction_hash: nil
+        )
+
+      from_address_hash =
+        log.second_topic
+        |> to_string()
+        |> String.replace_prefix("0x000000000000000000000000", "0x")
+
+      to_address_hash =
+        log.third_topic
+        |> to_string()
+        |> String.replace_prefix("0x000000000000000000000000", "0x")
+
+      token_contract_address = log.address
+      to_address = insert(:address, hash: to_address_hash)
+      from_address = insert(:address, hash: from_address_hash)
+
+      insert(:token_transfer,
+        transaction: nil,
+        transaction_hash: nil,
+        block: log.block,
+        log_index: log.index,
+        token_contract_address: token_contract_address,
+        from_address: from_address,
+        to_address: to_address
+      )
+
+      assert [] = TokenTransfer.uncataloged_token_transfer_block_numbers(log.block_number, log.block_number)
+    end
+  end
+
+  describe "ERC-7984 token transfers" do
+    test "filters ERC-7984 token transfers correctly" do
+      erc7984_token = insert(:token, type: "ERC-7984")
+      erc20_token = insert(:token, type: "ERC-20")
+
+      transaction = insert(:transaction) |> with_block()
+
+      erc7984_transfer =
+        insert(
+          :token_transfer,
+          token_type: "ERC-7984",
+          amount: nil,
+          token_ids: nil,
+          token: erc7984_token,
+          token_contract_address: erc7984_token.contract_address,
+          transaction: transaction
+        )
+
+      _erc20_transfer =
+        insert(
+          :token_transfer,
+          token_type: "ERC-20",
+          token: erc20_token,
+          token_contract_address: erc20_token.contract_address,
+          transaction: transaction
+        )
+
+      # Test that ERC-7984 transfers can be queried
+      transfers = TokenTransfer.fetch_token_transfers_from_token_hash(erc7984_token.contract_address_hash, [])
+
+      assert length(transfers) == 1
+      assert hd(transfers).token_type == "ERC-7984"
+      assert hd(transfers).amount == nil
+      assert hd(transfers).token_ids == nil
     end
   end
 end

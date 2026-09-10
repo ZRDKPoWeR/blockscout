@@ -1,7 +1,8 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.RecentTransactionsControllerTest do
   use BlockScoutWeb.ConnCase
 
-  import BlockScoutWeb.WebRouter.Helpers, only: [recent_transactions_path: 2]
+  import BlockScoutWeb.Routers.WebRouter.Helpers, only: [recent_transactions_path: 2]
 
   alias Explorer.Chain.Hash
 

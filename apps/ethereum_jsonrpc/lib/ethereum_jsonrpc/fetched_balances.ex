@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule EthereumJSONRPC.FetchedBalances do
   @moduledoc """
   Balance params and errors from a batch request from `eth_getBalance`.
@@ -19,6 +20,7 @@ defmodule EthereumJSONRPC.FetchedBalances do
   """
   def from_responses(responses, id_to_params) do
     responses
+    |> EthereumJSONRPC.sanitize_responses(id_to_params)
     |> Enum.map(&FetchedBalance.from_response(&1, id_to_params))
     |> Enum.reduce(
       %__MODULE__{},
@@ -30,6 +32,17 @@ defmodule EthereumJSONRPC.FetchedBalances do
           %__MODULE__{acc | errors: [reason | errors]}
       end
     )
+  end
+
+  @doc """
+  Merges two `t/0` to one `t/0`.
+  """
+  @spec merge(t(), t()) :: t()
+  def merge(%{params_list: params_list_1, errors: errors_1}, %{params_list: params_list_2, errors: errors_2}) do
+    %__MODULE__{
+      params_list: params_list_1 ++ params_list_2,
+      errors: errors_1 ++ errors_2
+    }
   end
 
   @doc """

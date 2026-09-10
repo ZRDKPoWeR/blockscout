@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.Tokens.Instance.MetadataView do
   use BlockScoutWeb, :view
 
@@ -5,5 +6,5 @@ defmodule BlockScoutWeb.Tokens.Instance.MetadataView do
 
   def format_metadata(nil), do: ""
 
-  def format_metadata(metadata), do: Poison.encode!(metadata, pretty: true)
+  def format_metadata(metadata), do: Poison.encode!(metadata, %{pretty: true})
 end

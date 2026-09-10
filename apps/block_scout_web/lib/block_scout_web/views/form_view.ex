@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.FormView do
   use BlockScoutWeb, :view
 
@@ -19,13 +20,13 @@ defmodule BlockScoutWeb.FormView do
 
   * `:label` - Label for the input field
 
-  ## Options as HTML 5 Attriutes
+  ## Options as HTML 5 Attributes
 
   The following options will be applied as HTML 5 attributes on the
   `<input>` element:
 
   * `:default_value` - Default value to attach to the input field
-  * `:id` - ID to attatch to the input field
+  * `:id` - ID to attach to the input field
   * `:placeholder` - Placeholder text for the input field
   * `:required` - Mark the input field as required
   * `:type` - Input field type

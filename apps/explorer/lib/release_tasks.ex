@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.ReleaseTasks do
   @moduledoc """
   Release tasks used to migrate or generate seeds.
@@ -14,7 +15,22 @@ defmodule Explorer.ReleaseTasks do
     :ecto_sql
   ]
 
-  @repos Application.compile_env(:blockscout, :ecto_repos, [Explorer.Repo])
+  def repos do
+    Application.get_env(:explorer, :ecto_repos)
+  end
+
+  def create_and_migrate do
+    start_services()
+
+    create()
+    run_migrations()
+
+    stop_services()
+  end
+
+  def create do
+    Enum.each(repos(), &create_db_for/1)
+  end
 
   def migrate(_argv) do
     start_services()
@@ -43,7 +59,7 @@ defmodule Explorer.ReleaseTasks do
     IO.puts("Starting repos..")
 
     # Switch pool_size to 2 for ecto > 3.0
-    Enum.each(@repos, & &1.start_link(pool_size: 1))
+    Enum.each(repos(), & &1.start_link(pool_size: 2))
   end
 
   defp stop_services do
@@ -51,8 +67,18 @@ defmodule Explorer.ReleaseTasks do
     :init.stop()
   end
 
+  defp create_db_for(repo) do
+    IO.puts("Create #{inspect(repo)} database if it doesn't exist")
+
+    case repo.__adapter__.storage_up(repo.config) do
+      :ok -> :ok
+      {:error, :already_up} -> :ok
+      {:error, term} -> {:error, term}
+    end
+  end
+
   defp run_migrations do
-    Enum.each(@repos, &run_migrations_for/1)
+    Enum.each(repos(), &run_migrations_for/1)
   end
 
   defp run_migrations_for(repo) do
@@ -63,7 +89,7 @@ defmodule Explorer.ReleaseTasks do
   end
 
   defp run_seeds do
-    Enum.each(@repos, &run_seeds_for/1)
+    Enum.each(repos(), &run_seeds_for/1)
   end
 
   # sobelow_skip ["RCE.CodeModule"]

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule EthereumJSONRPC.Case do
   @moduledoc """
   Adds `json_rpc_named_arguments` and `subscribe_named_arguments` to context.
@@ -15,7 +16,8 @@ defmodule EthereumJSONRPC.Case do
   environment variable to determine `:json_rpc_named_arguments` `:transport_options` `:url`.  Failure to set
   `ETHEREUM_JSONRPC_HTTP_URL` in this case will raise an `ArgumentError`.
 
-  * `EthereumJSONRPC.HTTP.HTTPoison` - HTTP responses from calls to real chain URLs
+  * `EthereumJSONRPC.HTTP.HTTPoison` - HTTP responses from calls to real chain URLs (using HTTPoison client)
+  * `EthereumJSONRPC.HTTP.Tesla` - HTTP responses from calls to real chain URLs (using Tesla.Mint client)
   * `EthereumJSONRPC.HTTP.Mox` - mock HTTP responses, so can be used for HTTP-only behavior like status codes.
 
   ## `subscribe_named_arguments`
@@ -28,7 +30,7 @@ defmodule EthereumJSONRPC.Case do
   require Logger
 
   setup do
-    module("ETHEREUM_JSONRPC_CASE", "EthereumJSONRPC.Case.Parity.Mox").setup()
+    module("ETHEREUM_JSONRPC_CASE", "EthereumJSONRPC.Case.Nethermind.Mox").setup()
   end
 
   def log_bad_gateway(under_test, assertions) do

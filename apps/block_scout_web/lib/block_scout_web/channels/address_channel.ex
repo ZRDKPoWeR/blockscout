@@ -1,8 +1,12 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.AddressChannel do
   @moduledoc """
   Establishes pub/sub channel for address page live updates.
   """
   use BlockScoutWeb, :channel
+  use Utils.CompileTimeEnvHelper, chain_type: [:explorer, :chain_type]
+
+  import Explorer.Chain.SmartContract, only: [burn_address_hash_string: 0]
 
   alias BlockScoutWeb.{
     AddressCoinBalanceView,
@@ -12,9 +16,8 @@ defmodule BlockScoutWeb.AddressChannel do
   }
 
   alias Explorer.{Chain, Market, Repo}
-  alias Explorer.Chain.{Hash, Transaction}
+  alias Explorer.Chain.{Hash, Transaction, Wei}
   alias Explorer.Chain.Hash.Address, as: AddressHash
-  alias Explorer.ExchangeRates.Token
   alias Phoenix.View
 
   intercept([
@@ -24,21 +27,28 @@ defmodule BlockScoutWeb.AddressChannel do
     "internal_transaction",
     "transaction",
     "verification_result",
-    "token_transfer"
+    "token_transfer",
+    "pending_transaction"
   ])
 
-  {:ok, burn_address_hash} = Chain.string_to_address_hash("0x0000000000000000000000000000000000000000")
+  {:ok, burn_address_hash} = Chain.string_to_address_hash(burn_address_hash_string())
   @burn_address_hash burn_address_hash
 
-  def join("addresses:" <> address_hash, _params, socket) do
-    {:ok, %{}, assign(socket, :address_hash, address_hash)}
+  def join("addresses_old:" <> address_hash_string, _params, socket) do
+    case valid_address_hash_and_not_restricted_access?(address_hash_string) do
+      :ok ->
+        {:ok, %{}, assign(socket, :address_hash, address_hash_string)}
+
+      reason ->
+        {:error, %{reason: reason}}
+    end
   end
 
   def handle_in("get_balance", _, socket) do
     with {:ok, casted_address_hash} <- AddressHash.cast(socket.assigns.address_hash),
          {:ok, address = %{fetched_coin_balance: balance}} when not is_nil(balance) <-
            Chain.hash_to_address(casted_address_hash),
-         exchange_rate <- Market.get_exchange_rate(Explorer.coin()) || Token.null(),
+         exchange_rate <- Market.get_coin_exchange_rate(),
          {:ok, rendered} <- render_balance_card(address, exchange_rate, socket) do
       reply =
         {:ok,
@@ -81,6 +91,9 @@ defmodule BlockScoutWeb.AddressChannel do
         push(socket, "verification", %{verification_result: :ok})
         {:noreply, socket}
 
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply, socket}
+
       {:error, result} ->
         push(socket, "verification", %{verification_result: result})
         {:noreply, socket}
@@ -119,27 +132,63 @@ defmodule BlockScoutWeb.AddressChannel do
 
   def handle_out("token_transfer", data, socket), do: handle_token_transfer(data, socket, "token_transfer")
 
-  def handle_out("coin_balance", %{block_number: block_number}, socket) do
-    coin_balance = Chain.get_coin_balance(socket.assigns.address_hash, block_number)
-
+  def handle_out("coin_balance", %{block_number: block_number, coin_balance: coin_balance}, socket) do
     Gettext.put_locale(BlockScoutWeb.Gettext, socket.assigns.locale)
 
-    rendered_coin_balance =
-      View.render_to_string(
-        AddressCoinBalanceView,
-        "_coin_balances.html",
-        conn: socket,
-        coin_balance: coin_balance
-      )
+    if coin_balance.value && coin_balance.delta do
+      rendered_coin_balance =
+        View.render_to_string(
+          AddressCoinBalanceView,
+          "_coin_balances.html",
+          conn: socket,
+          coin_balance: coin_balance
+        )
 
-    push(socket, "coin_balance", %{
-      coin_balance_html: rendered_coin_balance
-    })
+      push(socket, "coin_balance", %{
+        coin_balance_html: rendered_coin_balance
+      })
+
+      push_current_coin_balance(socket, block_number, coin_balance)
+    end
 
     {:noreply, socket}
   end
 
-  def handle_transaction(%{address: address, transaction: transaction}, socket, event) do
+  def handle_out("pending_transaction", data, socket), do: handle_transaction(data, socket, "transaction")
+
+  def push_current_coin_balance(socket, block_number, coin_balance) do
+    {:ok, hash} = Chain.string_to_address_hash(socket.assigns.address_hash)
+
+    rendered_current_coin_balance =
+      View.render_to_string(
+        AddressView,
+        "_current_coin_balance.html",
+        conn: socket,
+        address: Chain.hash_to_address(hash),
+        coin_balance: (coin_balance && coin_balance.value) || %Wei{value: Decimal.new(0)},
+        exchange_rate: Market.get_coin_exchange_rate()
+      )
+
+    rendered_link =
+      View.render_to_string(
+        AddressView,
+        "_block_link.html",
+        conn: socket,
+        block_number: block_number
+      )
+
+    push(socket, "current_coin_balance", %{
+      current_coin_balance_html: rendered_current_coin_balance,
+      current_coin_balance_block_number_html: rendered_link,
+      current_coin_balance_block_number: coin_balance.block_number
+    })
+  end
+
+  def handle_transaction(
+        %{address: address, transaction: transaction},
+        %Phoenix.Socket{handler: BlockScoutWeb.UserSocket} = socket,
+        event
+      ) do
     Gettext.put_locale(BlockScoutWeb.Gettext, socket.assigns.locale)
 
     rendered =
@@ -162,13 +211,27 @@ defmodule BlockScoutWeb.AddressChannel do
     {:noreply, socket}
   end
 
-  def handle_token_transfer(%{address: address, token_transfer: token_transfer}, socket, event) do
+  def handle_transaction(_, socket, _event) do
+    {:noreply, socket}
+  end
+
+  def handle_token_transfer(
+        %{address: address, token_transfer: token_transfer},
+        %Phoenix.Socket{handler: BlockScoutWeb.UserSocket} = socket,
+        event
+      ) do
     Gettext.put_locale(BlockScoutWeb.Gettext, socket.assigns.locale)
 
     transaction =
       Transaction
       |> Repo.get_by(hash: token_transfer.transaction_hash)
-      |> Repo.preload([:from_address, :to_address, :block, token_transfers: [:from_address, :to_address, :token]])
+      |> Repo.preload([
+        :from_address,
+        :to_address,
+        :block,
+        :created_contract_address,
+        token_transfers: [:from_address, :to_address, :token]
+      ])
 
     rendered =
       View.render_to_string(
@@ -190,6 +253,10 @@ defmodule BlockScoutWeb.AddressChannel do
     {:noreply, socket}
   end
 
+  def handle_token_transfer(_, socket, _event) do
+    {:noreply, socket}
+  end
+
   defp render_balance_card(address, exchange_rate, socket) do
     Gettext.put_locale(BlockScoutWeb.Gettext, socket.assigns.locale)
 
@@ -197,7 +264,7 @@ defmodule BlockScoutWeb.AddressChannel do
       rendered =
         View.render_to_string(
           AddressView,
-          "_balance_card.html",
+          "_balance_dropdown.html",
           conn: socket,
           address: address,
           coin_balance_status: :current,

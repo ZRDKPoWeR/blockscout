@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScout.Mixfile do
   use Mix.Project
 
@@ -5,53 +6,89 @@ defmodule BlockScout.Mixfile do
 
   def project do
     [
-      aliases: aliases(Mix.env()),
-      version: "2.0",
+      # app: :block_scout,
+      # aliases: aliases(config_env()),
+      version: "11.3.0",
       apps_path: "apps",
       deps: deps(),
-      dialyzer: [
-        plt_add_deps: :transitive,
-        plt_add_apps: ~w(ex_unit mix)a,
-        ignore_warnings: ".dialyzer-ignore"
-      ],
-      elixir: "~> 1.10",
-      preferred_cli_env: [
-        credo: :test,
-        dialyzer: :test
-      ],
-      start_permanent: Mix.env() == :prod,
+      dialyzer: dialyzer(),
+      elixir: "~> 1.19",
+      # start_permanent: config_env() == :prod,
       releases: [
         blockscout: [
           applications: [
             block_scout_web: :permanent,
             ethereum_jsonrpc: :permanent,
             explorer: :permanent,
-            indexer: :permanent
-          ]
+            indexer: :permanent,
+            utils: :permanent,
+            nft_media_handler: :permanent
+          ],
+          steps: [:assemble, &copy_prod_runtime_config/1],
+          validate_compile_env: false
         ]
       ]
     ]
   end
 
+  def cli do
+    [preferred_envs: [credo: :test, dialyzer: :test]]
+  end
+
   ## Private Functions
 
-  defp aliases(env) do
-    [
-      # to match behavior of `mix test` in `apps/indexer`, which needs to not start applications for `indexer` to
-      # prevent its supervision tree from starting, which is undesirable in test
-      test: "test --no-start"
-    ] ++ env_aliases(env)
+  defp copy_prod_runtime_config(%Mix.Release{path: path} = release) do
+    File.mkdir_p!(Path.join([path, "config", "runtime"]))
+
+    File.cp!(
+      Path.join(["config", "runtime", "prod.exs"]),
+      Path.join([path, "config", "runtime", "prod.exs"])
+    )
+
+    File.mkdir_p!(Path.join([path, "apps", "explorer", "config", "prod"]))
+
+    File.cp_r!(
+      Path.join(["apps", "explorer", "config", "prod"]),
+      Path.join([path, "apps", "explorer", "config", "prod"])
+    )
+
+    File.mkdir_p!(Path.join([path, "apps", "indexer", "config", "prod"]))
+
+    File.cp_r!(
+      Path.join(["apps", "indexer", "config", "prod"]),
+      Path.join([path, "apps", "indexer", "config", "prod"])
+    )
+
+    release
   end
 
-  defp env_aliases(:dev) do
-    []
-  end
-
-  defp env_aliases(_env) do
+  defp dialyzer() do
     [
-      compile: "compile --warnings-as-errors"
+      plt_add_deps: :app_tree,
+      plt_add_apps: ~w(credo ex_unit mix wallaby)a,
+      ignore_warnings: ".dialyzer_ignore.exs",
+      plt_core_path: "priv/plts",
+      plt_file: {:no_warn, "priv/plts/dialyzer.plt"}
     ]
   end
+
+  # defp aliases(env) do
+  #   [
+  #     # to match behavior of `mix test` in `apps/indexer`, which needs to not start applications for `indexer` to
+  #     # prevent its supervision tree from starting, which is undesirable in test
+  #     test: "test --no-start"
+  #   ] ++ env_aliases(env)
+  # end
+
+  # defp env_aliases(:dev) do
+  #   []
+  # end
+
+  # defp env_aliases(_env) do
+  #   [
+  #     compile: "compile --warnings-as-errors"
+  #   ]
+  # end
 
   # Dependencies can be Hex packages:
   #
@@ -67,10 +104,12 @@ defmodule BlockScout.Mixfile do
   # and cannot be accessed from applications inside the apps folder
   defp deps do
     [
-      {:absinthe_plug, git: "https://github.com/blockscout/absinthe_plug.git", tag: "1.5.3", override: true},
-      {:tesla, "~> 1.3.3"},
+      {:prometheus_ex, "~> 5.1.0", override: true},
+      {:absinthe_plug, git: "https://github.com/blockscout/absinthe_plug.git", tag: "1.5.8", override: true},
+      {:tesla, "~> 1.21.0"},
+      {:mint, "~> 1.10.0"},
       # Documentation
-      {:ex_doc, "~> 0.19.0", only: [:dev]},
+      {:ex_doc, "~> 0.40.1", only: :dev, runtime: false},
       {:number, "~> 1.0.3"}
     ]
   end

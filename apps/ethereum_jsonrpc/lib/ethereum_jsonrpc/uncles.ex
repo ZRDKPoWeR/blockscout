@@ -1,6 +1,7 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule EthereumJSONRPC.Uncles do
   @moduledoc """
-  List of [uncles](https://github.com/ethereum/wiki/wiki/Glossary#ethereum-blockchain).  Uncles are blocks that didn't
+  List of [uncles](https://ethereum.org/en/glossary).  Uncles are blocks that didn't
   make the main chain due to them being validated slightly behind what became the main chain.
   """
 

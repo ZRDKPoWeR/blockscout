@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 # https://github.com/CircleCI-Public/circleci-demo-elixir-phoenix/blob/a89de33a01df67b6773ac90adc74c34367a4a2d6/test/test_helper.exs#L1-L3
 junit_folder = Mix.Project.build_path() <> "/junit/#{Mix.Project.config()[:app]}"
 File.mkdir_p!(junit_folder)
@@ -11,11 +12,25 @@ ExUnit.start()
 
 {:ok, _} = Application.ensure_all_started(:ex_machina)
 
-Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo, :manual)
+Explorer.TestHelper.run_necessary_background_migrations()
 
-Mox.defmock(Explorer.ExchangeRates.Source.TestSource, for: Explorer.ExchangeRates.Source)
-Mox.defmock(Explorer.KnownTokens.Source.TestSource, for: Explorer.KnownTokens.Source)
-Mox.defmock(Explorer.Market.History.Source.TestSource, for: Explorer.Market.History.Source)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo.Account, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo.PolygonEdge, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo.RSK, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo.Shibarium, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo.Suave, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo.Beacon, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo.BridgedTokens, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo.Filecoin, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo.Stability, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo.Mud, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo.ShrunkInternalTransactions, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo.EventNotifications, :auto)
+
+Mox.defmock(Explorer.Market.Source.TestSource, for: Explorer.Market.Source)
 Mox.defmock(Explorer.History.TestHistorian, for: Explorer.History.Historian)
 
 Mox.defmock(EthereumJSONRPC.Mox, for: EthereumJSONRPC.Transport)
+
+Mox.defmock(Explorer.Mock.TeslaAdapter, for: Tesla.Adapter)

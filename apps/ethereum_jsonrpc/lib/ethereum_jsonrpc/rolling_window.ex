@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule EthereumJSONRPC.RollingWindow do
   @moduledoc """
   Tracker for counting an event that occurs within a moving time window.
@@ -20,8 +21,6 @@ defmodule EthereumJSONRPC.RollingWindow do
   """
 
   use GenServer
-
-  require Logger
 
   def child_spec([init_arguments]) do
     child_spec([init_arguments, []])
@@ -47,7 +46,7 @@ defmodule EthereumJSONRPC.RollingWindow do
     duration = Keyword.fetch!(opts, :duration)
     window_count = Keyword.fetch!(opts, :window_count)
 
-    unless rem(duration, window_count) == 0 do
+    if rem(duration, window_count) != 0 do
       raise ArgumentError, "duration must be evenly divisible by window_count"
     end
 
@@ -104,8 +103,6 @@ defmodule EthereumJSONRPC.RollingWindow do
 
   # Public for testing
   defp sweep(table, delete_match_spec, replace_match_spec) do
-    Logger.debug(fn -> "Sweeping windows" end)
-
     # Delete any rows where all windows empty
     :ets.match_delete(table, delete_match_spec)
 

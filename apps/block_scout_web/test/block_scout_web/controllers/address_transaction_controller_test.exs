@@ -1,26 +1,18 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.AddressTransactionControllerTest do
   use BlockScoutWeb.ConnCase, async: true
   use ExUnit.Case, async: false
 
-  import BlockScoutWeb.WebRouter.Helpers, only: [address_transaction_path: 3, address_transaction_path: 4]
+  import BlockScoutWeb.Routers.WebRouter.Helpers, only: [address_transaction_path: 3, address_transaction_path: 4]
   import Mox
 
   alias Explorer.Chain.{Address, Transaction}
-  alias Explorer.ExchangeRates.Token
+  alias Explorer.Market.Token
+
+  setup :verify_on_exit!
 
   describe "GET index/2" do
     setup :set_mox_global
-
-    setup do
-      configuration = Application.get_env(:explorer, :checksum_function)
-      Application.put_env(:explorer, :checksum_function, :eth)
-
-      :ok
-
-      on_exit(fn ->
-        Application.put_env(:explorer, :checksum_function, configuration)
-      end)
-    end
 
     test "with invalid address hash", %{conn: conn} do
       conn = get(conn, address_transaction_path(conn, :index, "invalid_address"))
@@ -28,18 +20,20 @@ defmodule BlockScoutWeb.AddressTransactionControllerTest do
       assert html_response(conn, 422)
     end
 
-    test "with valid address hash without address in the DB", %{conn: conn} do
-      conn =
-        get(
-          conn,
-          address_transaction_path(conn, :index, Address.checksum("0x8bf38d4764929064f2d4d3a56520a76ab3df415b"), %{
-            "type" => "JSON"
-          })
-        )
+    if Application.compile_env(:explorer, :chain_type) !== :rsk do
+      test "with valid address hash without address in the DB", %{conn: conn} do
+        conn =
+          get(
+            conn,
+            address_transaction_path(conn, :index, Address.checksum("0x8bf38d4764929064f2d4d3a56520a76ab3df415b"), %{
+              "type" => "JSON"
+            })
+          )
 
-      assert json_response(conn, 200)
-      transaction_tiles = json_response(conn, 200)["items"]
-      assert transaction_tiles |> length() == 0
+        assert json_response(conn, 200)
+        transaction_tiles = json_response(conn, 200)["items"]
+        assert transaction_tiles |> length() == 0
+      end
     end
 
     test "returns transactions for the address", %{conn: conn} do
@@ -144,8 +138,8 @@ defmodule BlockScoutWeb.AddressTransactionControllerTest do
         created_contract_address: address,
         to_address: nil,
         transaction: transaction,
-        block_hash: block.hash,
-        block_index: 0
+        transaction_index: transaction.index,
+        block_number: transaction.block_number
       )
 
       conn = get(conn, address_transaction_path(conn, :index, Address.checksum(address)), %{"type" => "JSON"})

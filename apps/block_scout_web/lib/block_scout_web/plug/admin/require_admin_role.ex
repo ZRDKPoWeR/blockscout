@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.Plug.Admin.RequireAdminRole do
   @moduledoc """
   Authorization plug requiring a user to be authenticated and have an admin role.
@@ -7,7 +8,7 @@ defmodule BlockScoutWeb.Plug.Admin.RequireAdminRole do
 
   import Phoenix.Controller, only: [redirect: 2]
 
-  alias BlockScoutWeb.AdminRouter.Helpers, as: AdminRoutes
+  alias BlockScoutWeb.Routers.AdminRouter.Helpers, as: AdminRoutes
   alias Explorer.Admin
 
   def init(opts), do: opts

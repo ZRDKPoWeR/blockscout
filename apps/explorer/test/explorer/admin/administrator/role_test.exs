@@ -1,4 +1,5 @@
-defmodule Exploer.Admin.Administrator.RoleTest do
+# SPDX-License-Identifier: LicenseRef-Blockscout
+defmodule Explorer.Admin.Administrator.RoleTest do
   use ExUnit.Case
 
   alias Explorer.Admin.Administrator.Role

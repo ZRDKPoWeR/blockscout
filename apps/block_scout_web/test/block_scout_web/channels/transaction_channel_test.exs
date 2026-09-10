@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.TransactionChannelTest do
   use BlockScoutWeb.ChannelCase
 
@@ -5,7 +6,7 @@ defmodule BlockScoutWeb.TransactionChannelTest do
   alias BlockScoutWeb.Notifier
 
   test "subscribed user is notified of new_transaction topic" do
-    topic = "transactions:new_transaction"
+    topic = "transactions_old:new_transaction"
     @endpoint.subscribe(topic)
 
     transaction =
@@ -16,7 +17,7 @@ defmodule BlockScoutWeb.TransactionChannelTest do
     Notifier.handle_event({:chain_event, :transactions, :realtime, [transaction]})
 
     receive do
-      %Phoenix.Socket.Broadcast{topic: ^topic, event: "transaction", payload: payload} ->
+      %Phoenix.Socket.Broadcast{topic: ^topic, event: "transaction", payload: %{transaction: _transaction} = payload} ->
         assert payload.transaction.hash == transaction.hash
     after
       :timer.seconds(5) ->
@@ -25,7 +26,7 @@ defmodule BlockScoutWeb.TransactionChannelTest do
   end
 
   test "subscribed user is notified of new_pending_transaction topic" do
-    topic = "transactions:new_pending_transaction"
+    topic = "transactions_old:new_pending_transaction"
     @endpoint.subscribe(topic)
 
     pending = insert(:transaction)
@@ -33,7 +34,11 @@ defmodule BlockScoutWeb.TransactionChannelTest do
     Notifier.handle_event({:chain_event, :transactions, :realtime, [pending]})
 
     receive do
-      %Phoenix.Socket.Broadcast{topic: ^topic, event: "pending_transaction", payload: payload} ->
+      %Phoenix.Socket.Broadcast{
+        topic: ^topic,
+        event: "pending_transaction",
+        payload: %{transaction: _transaction} = payload
+      } ->
         assert payload.transaction.hash == pending.hash
     after
       :timer.seconds(5) ->
@@ -47,7 +52,7 @@ defmodule BlockScoutWeb.TransactionChannelTest do
       |> insert()
       |> with_block()
 
-    topic = "transactions:#{Hash.to_string(transaction.hash)}"
+    topic = "transactions_old:#{Hash.to_string(transaction.hash)}"
     @endpoint.subscribe(topic)
 
     Notifier.handle_event({:chain_event, :transactions, :realtime, [transaction]})

@@ -1,22 +1,27 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.AddressValidationController do
   @moduledoc """
   Display all the blocks that this address validates.
   """
   use BlockScoutWeb, :controller
 
+  import BlockScoutWeb.Account.AuthController, only: [current_user: 1]
+
   import BlockScoutWeb.Chain,
     only: [paging_options: 1, next_page_params: 3, split_list_by_page: 1]
 
-  alias BlockScoutWeb.{AccessHelpers, BlockView}
-  alias Explorer.ExchangeRates.Token
+  import BlockScoutWeb.Models.GetAddressTags, only: [get_address_tags: 2]
+
+  alias BlockScoutWeb.{AccessHelper, BlockView, Controller}
   alias Explorer.{Chain, Market}
-  alias Indexer.Fetcher.CoinBalanceOnDemand
+  alias Explorer.Chain.Block
+  alias Indexer.Fetcher.OnDemand.CoinBalance, as: CoinBalanceOnDemand
   alias Phoenix.View
 
   def index(conn, %{"address_id" => address_hash_string, "type" => "JSON"} = params) do
     with {:ok, address_hash} <- Chain.string_to_address_hash(address_hash_string),
-         {:ok, _} <- Chain.find_or_insert_address_from_hash(address_hash, [], false),
-         {:ok, false} <- AccessHelpers.restricted_access?(address_hash_string, params) do
+         {:ok, _} <- Chain.find_or_insert_address_from_hash(address_hash, []),
+         {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params) do
       full_options =
         Keyword.merge(
           [
@@ -30,7 +35,7 @@ defmodule BlockScoutWeb.AddressValidationController do
           paging_options(params)
         )
 
-      blocks_plus_one = Chain.get_blocks_validated_by_address(full_options, address_hash)
+      blocks_plus_one = Block.get_blocks_validated_by_address(full_options, address_hash)
       {blocks, next_page} = split_list_by_page(blocks_plus_one)
 
       next_page_path =
@@ -69,17 +74,20 @@ defmodule BlockScoutWeb.AddressValidationController do
   end
 
   def index(conn, %{"address_id" => address_hash_string} = params) do
+    ip = AccessHelper.conn_to_ip_string(conn)
+
     with {:ok, address_hash} <- Chain.string_to_address_hash(address_hash_string),
          {:ok, address} <- Chain.find_or_insert_address_from_hash(address_hash),
-         {:ok, false} <- AccessHelpers.restricted_access?(address_hash_string, params) do
+         {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params) do
       render(
         conn,
         "index.html",
         address: address,
-        coin_balance_status: CoinBalanceOnDemand.trigger_fetch(address),
-        current_path: current_path(conn),
+        coin_balance_status: CoinBalanceOnDemand.trigger_fetch(ip, address),
+        current_path: Controller.current_full_path(conn),
         counters_path: address_path(conn, :address_counters, %{"id" => address_hash_string}),
-        exchange_rate: Market.get_exchange_rate(Explorer.coin()) || Token.null()
+        exchange_rate: Market.get_coin_exchange_rate(),
+        tags: get_address_tags(address_hash, current_user(conn))
       )
     else
       {:restricted_access, _} ->
@@ -87,9 +95,6 @@ defmodule BlockScoutWeb.AddressValidationController do
 
       :error ->
         unprocessable_entity(conn)
-
-      {:error, :not_found} ->
-        not_found(conn)
     end
   end
 end

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule EthereumJSONRPC.RequestCoordinator do
   @moduledoc """
   Coordinates requests with a backoff strategy.
@@ -16,11 +17,11 @@ defmodule EthereumJSONRPC.RequestCoordinator do
     * `:table` - name of the ets table to store the data in
   * `:wait_per_timeout` - Milliseconds to wait for each recent timeout within
     the tracked window
-  * `:max_jitter` - Maximimum amount of time in milliseconds to be added to each
+  * `:max_jitter` - Maximum amount of time in milliseconds to be added to each
     wait before multiplied by timeout count
   * `:throttle_rolling_window_opts` - Options for the process tracking all requests
     * `:window_count` - Number of windows
-    * `:duration` - Total amount of time to coumt events in milliseconds
+    * `:duration` - Total amount of time to count events in milliseconds
     * `:table` - name of the ets table to store the data in
   * `:throttle_rate_limit` - The total number of requests allowed in the all windows.
 
@@ -58,7 +59,7 @@ defmodule EthereumJSONRPC.RequestCoordinator do
 
   alias EthereumJSONRPC.{RollingWindow, Tracer, Transport}
 
-  @error_key :throttleable_error_count
+  @error_key_base "throttleable_error_count"
   @throttle_key :throttle_requests_count
 
   @doc """
@@ -73,7 +74,9 @@ defmodule EthereumJSONRPC.RequestCoordinator do
   @spec perform(Transport.batch_request(), Transport.t(), Transport.options(), non_neg_integer()) ::
           {:ok, Transport.batch_response()} | {:error, term()}
   def perform(request, transport, transport_options, throttle_timeout) do
-    sleep_time = sleep_time()
+    request_methods = request_methods(request)
+
+    sleep_time = sleep_time(request_methods)
 
     if sleep_time <= throttle_timeout do
       :timer.sleep(sleep_time)
@@ -81,10 +84,11 @@ defmodule EthereumJSONRPC.RequestCoordinator do
 
       case throttle_request(remaining_wait_time) do
         :ok ->
+          # credo:disable-for-next-line
           trace_request(request, fn ->
             request
             |> transport.json_rpc(transport_options)
-            |> handle_transport_response()
+            |> handle_transport_response(request_methods)
           end)
 
         :error ->
@@ -109,19 +113,29 @@ defmodule EthereumJSONRPC.RequestCoordinator do
 
   defp trace_request(_, fun), do: fun.()
 
-  defp handle_transport_response({:error, {:bad_gateway, _}} = error) do
-    RollingWindow.inc(table(), @error_key)
+  defp request_methods(requests) when is_list(requests) do
+    requests
+    |> Enum.flat_map(&request_methods/1)
+    |> Enum.uniq()
+  end
+
+  defp request_methods(%{method: method}), do: [method]
+  defp request_methods(_), do: []
+
+  defp handle_transport_response({:error, {error_type, _}} = error, methods)
+       when error_type in [:bad_gateway, :bad_response] do
+    inc_methods_error_count(methods)
     inc_throttle_table()
     error
   end
 
-  defp handle_transport_response({:error, :timeout} = error) do
-    RollingWindow.inc(table(), @error_key)
+  defp handle_transport_response({:error, :timeout} = error, methods) do
+    inc_methods_error_count(methods)
     inc_throttle_table()
     error
   end
 
-  defp handle_transport_response(response) do
+  defp handle_transport_response(response, _methods) do
     inc_throttle_table()
     response
   end
@@ -153,13 +167,23 @@ defmodule EthereumJSONRPC.RequestCoordinator do
     end
   end
 
-  defp sleep_time do
-    wait_coefficient = RollingWindow.count(table(), @error_key)
+  defp inc_methods_error_count(methods) do
+    Enum.each(methods, &RollingWindow.inc(table(), method_error_key(&1)))
+  end
+
+  defp sleep_time(request_methods) do
+    wait_coefficient =
+      Enum.reduce(request_methods, 0, fn request_method, acc ->
+        max(acc, RollingWindow.count(table(), method_error_key(request_method)))
+      end)
+
     jitter = :rand.uniform(config!(:max_jitter))
     wait_per_timeout = config!(:wait_per_timeout)
 
     wait_coefficient * (wait_per_timeout + jitter)
   end
+
+  defp method_error_key(method), do: :"#{@error_key_base}_#{method}"
 
   defp table do
     :rolling_window_opts

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule EthereumJSONRPC.WebSocket.Case.Mox do
   @moduledoc """
   `EthereumJSONRPC.WebSocket.Case` using `Mox`
@@ -24,12 +25,12 @@ defmodule EthereumJSONRPC.WebSocket.Case.Mox do
         []
       )
     end)
-    |> stub(:start_link, fn _ ->
+    |> stub(:start_link, fn _, _ ->
       Task.start_link(__MODULE__, :loop, [%{}])
     end)
 
     url = "wss://example.com/ws"
-    web_socket = start_supervised!({web_socket_module, [url, [keepalive: :timer.minutes(10)]]})
+    web_socket = start_supervised!(%{id: :ws_client, start: {web_socket_module, :start_link, [url, []]}})
 
     %{
       block_interval: @block_interval,

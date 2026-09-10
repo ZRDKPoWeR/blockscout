@@ -1,83 +1,108 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.TransactionController do
   use BlockScoutWeb, :controller
 
-  import BlockScoutWeb.Chain, only: [paging_options: 1, next_page_params: 3, split_list_by_page: 1]
+  import BlockScoutWeb.Account.AuthController, only: [current_user: 1]
+  import BlockScoutWeb.Models.GetAddressTags, only: [get_address_tags: 2]
+  import BlockScoutWeb.Models.GetTransactionTags, only: [get_transaction_with_addresses_tags: 2]
 
-  alias BlockScoutWeb.{AccessHelpers, TransactionView}
-  alias Explorer.Chain
-  alias Phoenix.View
+  alias BlockScoutWeb.{
+    AccessHelper,
+    Controller,
+    TransactionInternalTransactionController,
+    TransactionTokenTransferController,
+    TransactionView
+  }
 
-  {:ok, burn_address_hash} = Chain.string_to_address_hash("0x0000000000000000000000000000000000000000")
-  @burn_address_hash burn_address_hash
+  alias Explorer.{Chain, Market}
+  alias Explorer.Chain.Cache.Counters.TransactionsCount
+  alias Explorer.Chain.Transaction
 
-  def index(conn, %{"type" => "JSON"} = params) do
-    full_options =
-      Keyword.merge(
-        [
-          necessity_by_association: %{
-            :block => :required,
-            [created_contract_address: :names] => :optional,
-            [from_address: :names] => :optional,
-            [to_address: :names] => :optional
-          }
-        ],
-        paging_options(params)
-      )
-
-    transactions_plus_one = Chain.recent_collated_transactions(full_options)
-    {transactions, next_page} = split_list_by_page(transactions_plus_one)
-
-    next_page_path =
-      case next_page_params(next_page, transactions, params) do
-        nil ->
-          nil
-
-        next_page_params ->
-          transaction_path(conn, :index, Map.delete(next_page_params, "type"))
-      end
-
-    json(
-      conn,
-      %{
-        items:
-          Enum.map(transactions, fn transaction ->
-            View.render_to_string(
-              TransactionView,
-              "_tile.html",
-              transaction: transaction,
-              burn_address_hash: @burn_address_hash,
-              conn: conn
-            )
-          end),
-        next_page_path: next_page_path
-      }
-    )
-  end
+  @necessity_by_association %{
+    :block => :optional,
+    [created_contract_address: :names] => :optional,
+    [from_address: :names] => :optional,
+    [to_address: :names] => :optional,
+    [to_address: :smart_contract] => :optional,
+    :token_transfers => :optional
+  }
 
   def index(conn, _params) do
-    transaction_estimated_count = Chain.transaction_estimated_count()
+    transaction_estimated_count = TransactionsCount.get()
 
     render(
       conn,
       "index.html",
-      current_path: current_path(conn),
+      current_path: Controller.current_full_path(conn),
       transaction_estimated_count: transaction_estimated_count
     )
   end
 
-  def show(conn, %{"id" => id}) do
-    with {:ok, transaction_hash} <- Chain.string_to_transaction_hash(id),
-         :ok <- Chain.check_transaction_exists(transaction_hash) do
-      if Chain.transaction_has_token_transfers?(transaction_hash) do
-        redirect(conn, to: AccessHelpers.get_path(conn, :transaction_token_transfer_path, :index, id))
-      else
-        redirect(conn, to: AccessHelpers.get_path(conn, :transaction_internal_transaction_path, :index, id))
-      end
+  def show(conn, %{"id" => transaction_hash_string, "type" => "JSON"}) do
+    case Chain.string_to_full_hash(transaction_hash_string) do
+      {:ok, transaction_hash} ->
+        if Chain.transaction_has_token_transfers?(transaction_hash) do
+          TransactionTokenTransferController.index(conn, %{
+            "transaction_id" => transaction_hash_string,
+            "type" => "JSON"
+          })
+        else
+          TransactionInternalTransactionController.index(conn, %{
+            "transaction_id" => transaction_hash_string,
+            "type" => "JSON"
+          })
+        end
+
+      :error ->
+        set_not_found_view(conn, transaction_hash_string)
+    end
+  end
+
+  def show(conn, %{"id" => id} = params) do
+    with {:ok, transaction_hash} <- Chain.string_to_full_hash(id),
+         :ok <- Transaction.check_transaction_exists(transaction_hash) do
+      render_transaction_page(conn, id, transaction_hash, params)
     else
       :error ->
-        set_invalid_view(conn, id)
+        unprocessable_entity(conn)
 
       :not_found ->
+        set_not_found_view(conn, id)
+    end
+  end
+
+  defp render_transaction_page(conn, id, transaction_hash, params) do
+    show_token_transfers? = Chain.transaction_has_token_transfers?(transaction_hash)
+
+    template =
+      if show_token_transfers? do
+        "show_token_transfers.html"
+      else
+        "show_internal_transactions.html"
+      end
+
+    with {:ok, transaction} <-
+           Chain.hash_to_transaction(transaction_hash, necessity_by_association: @necessity_by_association),
+         {:ok, false} <- AccessHelper.restricted_access?(to_string(transaction.from_address_hash), params),
+         {:ok, false} <- AccessHelper.restricted_access?(to_string(transaction.to_address_hash), params) do
+      render(
+        conn,
+        template,
+        exchange_rate: Market.get_coin_exchange_rate(),
+        block_height: Chain.block_height(),
+        current_path: Controller.current_full_path(conn),
+        current_user: current_user(conn),
+        show_token_transfers: show_token_transfers?,
+        transaction: transaction,
+        from_tags: get_address_tags(transaction.from_address_hash, current_user(conn)),
+        to_tags: get_address_tags(transaction.to_address_hash, current_user(conn)),
+        transaction_tags: get_transaction_with_addresses_tags(transaction, current_user(conn))
+      )
+    else
+      {:error, :not_found} ->
+        set_not_found_view(conn, id)
+
+      {:restricted_access, _} ->
         set_not_found_view(conn, id)
     end
   end
@@ -87,12 +112,5 @@ defmodule BlockScoutWeb.TransactionController do
     |> put_status(404)
     |> put_view(TransactionView)
     |> render("not_found.html", transaction_hash: transaction_hash_string)
-  end
-
-  def set_invalid_view(conn, transaction_hash_string) do
-    conn
-    |> put_status(422)
-    |> put_view(TransactionView)
-    |> render("invalid.html", transaction_hash: transaction_hash_string)
   end
 end

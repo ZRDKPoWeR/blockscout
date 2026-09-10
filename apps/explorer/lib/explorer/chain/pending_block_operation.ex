@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Chain.PendingBlockOperation do
   @moduledoc """
   Tracks a block that has pending operations.
@@ -5,26 +6,31 @@ defmodule Explorer.Chain.PendingBlockOperation do
 
   use Explorer.Schema
 
-  alias Explorer.Chain.{Block, Hash}
+  import Explorer.Chain, only: [add_fetcher_limit: 2]
 
-  @required_attrs ~w(block_hash fetch_internal_transactions)a
+  alias Explorer.Chain.{Block, Hash}
+  alias Explorer.Repo
+
+  @required_attrs ~w(block_hash block_number)a
 
   @typedoc """
    * `block_hash` - the hash of the block that has pending operations.
-   * `fetch_internal_transactions` - if the block needs its internal transactions fetched (or not)
   """
-  @type t :: %__MODULE__{
-          block_hash: Hash.Full.t(),
-          fetch_internal_transactions: boolean()
-        }
-
   @primary_key false
-  schema "pending_block_operations" do
-    field(:fetch_internal_transactions, :boolean)
-
+  typed_schema "pending_block_operations" do
     timestamps()
 
-    belongs_to(:block, Block, foreign_key: :block_hash, primary_key: true, references: :hash, type: Hash.Full)
+    field(:block_number, :integer, null: false)
+
+    belongs_to(:block, Block,
+      foreign_key: :block_hash,
+      primary_key: true,
+      references: :hash,
+      type: Hash.Full,
+      null: false
+    )
+
+    field(:priority, :integer)
   end
 
   def changeset(%__MODULE__{} = pending_ops, attrs) do
@@ -35,53 +41,71 @@ defmodule Explorer.Chain.PendingBlockOperation do
     |> unique_constraint(:block_hash, name: :pending_block_operations_pkey)
   end
 
+  def block_hashes do
+    from(
+      pending_ops in __MODULE__,
+      select: pending_ops.block_hash
+    )
+  end
+
   @doc """
-  Returns all pending block operations with the `block_hash` in the given list,
-  using "FOR UPDATE" to grab ShareLocks in order (see docs: sharelocks.md)
+    Returns the count of pending block operations in provided blocks range
+    (between `from_block_number` and `to_block_number`).
   """
-  def fetch_and_lock_by_hashes(hashes) when is_list(hashes) do
-    from(
-      pending_ops in __MODULE__,
-      where: pending_ops.block_hash in ^hashes,
-      order_by: [asc: pending_ops.block_hash],
-      lock: "FOR UPDATE"
-    )
+  @spec blocks_count_in_range(integer(), integer()) :: integer()
+  def blocks_count_in_range(from_block_number, to_block_number) when from_block_number <= to_block_number do
+    __MODULE__
+    |> where([pbo], pbo.block_number >= ^from_block_number)
+    |> where([pbo], pbo.block_number <= ^to_block_number)
+    |> select([pbo], count(pbo.block_number))
+    |> Repo.one(timeout: :infinity)
   end
 
-  def block_hashes(filter \\ nil)
+  @doc """
+  Returns a stream of all blocks with unfetched internal transactions, using
+  the `pending_block_operation` table.
 
-  def block_hashes(filter) when is_nil(filter) do
-    from(
-      pending_ops in __MODULE__,
-      select: pending_ops.block_hash
-    )
+      iex> unfetched = insert(:block)
+      iex> insert(:pending_block_operation, block: unfetched, block_number: unfetched.number)
+      iex> {:ok, number_set} = Explorer.Chain.stream_blocks_with_unfetched_internal_transactions(
+      ...>   MapSet.new(),
+      ...>   fn number, acc ->
+      ...>     MapSet.put(acc, number)
+      ...>   end
+      ...> )
+      iex> unfetched.number in number_set
+      true
+
+  """
+  @spec stream_blocks_with_unfetched_internal_transactions(
+          initial :: accumulator,
+          reducer :: (entry :: term(), accumulator -> accumulator),
+          limited? :: boolean()
+        ) :: {:ok, accumulator}
+        when accumulator: term()
+  def stream_blocks_with_unfetched_internal_transactions(initial, reducer, limited? \\ false, with_priority? \\ false)
+      when is_function(reducer, 2) do
+    direction = Application.get_env(:indexer, :internal_transactions_fetch_order)
+
+    query =
+      from(
+        po in __MODULE__,
+        where: not is_nil(po.block_number),
+        select: po.block_number,
+        order_by: [{^direction, po.block_number}]
+      )
+
+    query
+    |> maybe_add_priority_filter(with_priority?)
+    |> add_fetcher_limit(limited?)
+    |> Repo.stream_reduce(initial, reducer)
   end
 
-  def block_hashes(filters) when is_list(filters) do
-    true_filters = Keyword.new(filters, &{&1, true})
+  defp maybe_add_priority_filter(query, false), do: query
 
-    from(
-      pending_ops in __MODULE__,
-      where: ^true_filters,
-      select: pending_ops.block_hash
-    )
-  end
-
-  def block_hashes(filter), do: block_hashes([filter])
-
-  def default_on_conflict do
-    from(
-      pending_ops in __MODULE__,
-      update: [
-        set: [
-          fetch_internal_transactions:
-            pending_ops.fetch_internal_transactions or fragment("EXCLUDED.fetch_internal_transactions"),
-          # Don't update `block_hash` as it is used for the conflict target
-          inserted_at: pending_ops.inserted_at,
-          updated_at: fragment("EXCLUDED.updated_at")
-        ]
-      ],
-      where: fragment("EXCLUDED.fetch_internal_transactions <> ?", pending_ops.fetch_internal_transactions)
+  defp maybe_add_priority_filter(query, true) do
+    from(pbo in query,
+      where: not is_nil(pbo.priority)
     )
   end
 end

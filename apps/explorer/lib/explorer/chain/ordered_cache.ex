@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Chain.OrderedCache do
   @moduledoc """
   Behaviour for a cache of ordered elements.
@@ -35,6 +36,15 @@ defmodule Explorer.Chain.OrderedCache do
   and `c:element_to_id/1` callbacks.
   For typechecking purposes it's also recommended to override the `t:element/0`
   and `t:id/0` type definitions.
+
+  ## Distributed writes
+
+  In split API/indexer deployments, `update/1` uses `do_raw_update/2`: the ids list and
+  elements are written to the local `ConCache` first, then indexer nodes hand the prepared
+  update to `Explorer.Chain.Cache.Propagator`. The propagator coalesces updates and
+  asynchronously multicasts them to other cluster nodes via `:erpc`, which call
+  `do_raw_update/2` with `propagate: false` and write locally without any database access.
+  The local write never waits for a remote node.
   """
 
   @type element :: struct()
@@ -113,6 +123,19 @@ defmodule Explorer.Chain.OrderedCache do
   @callback take_enough(integer()) :: [element] | nil
 
   @doc """
+  Behaves like `take_enough/1`, but addresses [#10445](https://github.com/blockscout/blockscout/issues/10445).
+  """
+  @callback atomic_take_enough(integer()) :: [element] | nil
+
+  @doc """
+  Processes the elements before updating the cache.
+  This function is called before the `update/1` function and can be used to
+  modify the elements to be inserted. Can be used to optimize memory usage along
+  with fetching time.
+  """
+  @callback sanitize_before_update(element) :: element
+
+  @doc """
   Adds an element, or a list of elements, to the cache.
   When the cache is full, only the most prevailing elements will be stored, based
   on `c:prevails?/2`.
@@ -138,6 +161,7 @@ defmodule Explorer.Chain.OrderedCache do
 
     # credo:disable-for-next-line Credo.Check.Refactor.LongQuoteBlocks
     quote do
+      require Logger
       alias Explorer.Chain.OrderedCache
 
       @behaviour OrderedCache
@@ -163,6 +187,9 @@ defmodule Explorer.Chain.OrderedCache do
 
       @impl OrderedCache
       def element_to_id(element), do: element
+
+      @impl OrderedCache
+      def sanitize_before_update(element), do: element
 
       ### Straightforward fetching functions
 
@@ -204,6 +231,22 @@ defmodule Explorer.Chain.OrderedCache do
         end
       end
 
+      @impl OrderedCache
+      def atomic_take_enough(amount) do
+        items =
+          cache_name()
+          |> ConCache.ets()
+          |> :ets.tab2list()
+
+        if amount <= Enum.count(items) - 1 do
+          items
+          |> Enum.reject(fn {key, _value} -> key == ids_list_key() end)
+          |> Enum.sort(&prevails?/2)
+          |> Enum.take(amount)
+          |> Enum.map(fn {_key, value} -> value end)
+        end
+      end
+
       ### Updating function
 
       def remove_deleted_from_index({:delete, _cache_pid, id}) do
@@ -223,11 +266,56 @@ defmodule Explorer.Chain.OrderedCache do
       def update(elements) when is_nil(elements), do: :ok
 
       def update(elements) when is_list(elements) do
+        case Explorer.mode() do
+          mode when mode in [:all, :api, :indexer] ->
+            elements
+            |> Enum.sort_by(&element_to_id(&1), &prevails?(&1, &2))
+            |> Enum.take(max_size())
+            |> do_preloads()
+            |> Enum.map(&{element_to_id(&1), sanitize_before_update(&1)})
+            |> do_raw_update(true)
+
+          _ ->
+            :ok
+        end
+      end
+
+      def update(element), do: update([element])
+
+      @doc """
+      Merges prepared `{id, element}` pairs into the local ordered cache.
+
+      With `propagate: true` (the writing side) the elements are written locally and, when
+      `Explorer.mode/0` is `:indexer`, handed to `Explorer.Chain.Cache.Propagator`, which
+      multicasts them to the other cluster nodes asynchronously. The local write never waits
+      for a remote node.
+
+      With `propagate: false` (the receiving side) the elements, already preloaded by the
+      sender, are written locally without any database access.
+      """
+      def do_raw_update(prepared_elements, true) do
+        write_locally(prepared_elements)
+
+        if Explorer.mode() == :indexer do
+          # credo:disable-for-next-line Credo.Check.Design.AliasUsage
+          Explorer.Chain.Cache.Propagator.enqueue_ordered(__MODULE__, prepared_elements)
+        end
+
+        :ok
+      end
+
+      def do_raw_update(prepared_elements, false) do
+        if Explorer.mode() == :indexer do
+          Logger.error("Indexer got unexpected propagation call to do_raw_update/2")
+        end
+
+        write_locally(prepared_elements)
+      end
+
+      defp write_locally(prepared_elements) do
         ConCache.update(cache_name(), ids_list_key(), fn ids ->
           updated_list =
-            elements
-            |> Enum.map(&{element_to_id(&1), &1})
-            |> Enum.sort(&prevails?(&1, &2))
+            prepared_elements
             |> merge_and_update(ids || [], max_size())
 
           # ids_list is set to never expire
@@ -235,7 +323,25 @@ defmodule Explorer.Chain.OrderedCache do
         end)
       end
 
-      def update(element), do: update([element])
+      defp do_preloads(elements) do
+        if Enum.empty?(preloads()) do
+          elements
+        else
+          try do
+            Explorer.Repo.preload(elements, preloads())
+          rescue
+            error in [Postgrex.Error, DBConnection.ConnectionError] ->
+              Logger.error(fn ->
+                [
+                  "Error while preloading elements for ordered cache: ",
+                  Exception.format(:error, error, __STACKTRACE__)
+                ]
+              end)
+
+              elements
+          end
+        end
+      end
 
       defp merge_and_update(_candidates, existing, 0) do
         # if there is no more space in the list remove the remaining existing
@@ -246,7 +352,7 @@ defmodule Explorer.Chain.OrderedCache do
 
       defp merge_and_update([], existing, size) do
         # if there are no more candidates to be inserted keep as many of the
-        # exsisting elements and remove the rest
+        # existing elements and remove the rest
         {remaining, to_remove} = Enum.split(existing, size)
         remove(to_remove)
         remaining
@@ -274,7 +380,7 @@ defmodule Explorer.Chain.OrderedCache do
             [head | merge_and_update(to_check, tail, size - 1)]
 
           prevails?(head, candidate_id) ->
-            # keep the prevaling existing value and compare all candidates against the rest
+            # keep the prevailing existing value and compare all candidates against the rest
             [head | merge_and_update(candidates, tail, size - 1)]
 
           true ->
@@ -290,7 +396,7 @@ defmodule Explorer.Chain.OrderedCache do
         # Different updates cannot interfere with the removed element because
         # if this was scheduled for removal it means it is too old, so following
         # updates cannot insert it in the future.
-        Task.start(fn ->
+        Task.start_link(fn ->
           Process.sleep(100)
 
           if is_list(key) do
@@ -302,17 +408,10 @@ defmodule Explorer.Chain.OrderedCache do
       end
 
       defp put_element(element_id, element) do
-        full_element =
-          if Enum.empty?(preloads()) do
-            element
-          else
-            Explorer.Repo.preload(element, preloads())
-          end
-
         # dirty puts are a little faster than puts with locks.
         # this is not a problem because this is the only function modifying rows
         # and it only gets called inside `update`, which works isolated
-        ConCache.dirty_put(cache_name(), element_id, full_element)
+        ConCache.dirty_put(cache_name(), element_id, element)
       end
 
       ### Supervisor's child specification
@@ -348,7 +447,8 @@ defmodule Explorer.Chain.OrderedCache do
                      max_size: 0,
                      preloads: 0,
                      prevails?: 2,
-                     element_to_id: 1
+                     element_to_id: 1,
+                     sanitize_before_update: 1
     end
   end
 end

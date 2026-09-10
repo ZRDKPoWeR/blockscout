@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Indexer.Fetcher.TokenUpdaterTest do
   use Explorer.DataCase
 
@@ -16,7 +17,7 @@ defmodule Indexer.Fetcher.TokenUpdaterTest do
       symbol: nil,
       decimals: 10,
       cataloged: true,
-      updated_at: DateTime.add(DateTime.utc_now(), -:timer.hours(50), :millisecond)
+      metadata_updated_at: DateTime.add(DateTime.utc_now(), -:timer.hours(50), :millisecond)
     )
 
     expect(

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Chain.Cache.Accounts do
   @moduledoc """
   Caches the top Addresses
@@ -34,7 +35,7 @@ defmodule Explorer.Chain.Cache.Accounts do
   def drop([]), do: :ok
 
   def drop(addresses) when is_list(addresses) do
-    # This has to be used by the Indexer insead of `update`.
+    # This has to be used by the Indexer instead of `update`.
     # The reason being that addresses already in the cache can change their balance
     # value and removing or updating them will result into a potentially invalid
     # cache status, that would not even get corrected with time.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Indexer.Fetcher.BlockRewardTest do
   # MUST be `async: false` so that {:shared, pid} is set for connection to allow CoinBalanceFetcher's self-send to have
   # connection allowed immediately.
@@ -30,7 +31,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
         transport: EthereumJSONRPC.Mox,
         transport_options: [],
         # Which one does not matter, so pick one
-        variant: EthereumJSONRPC.Parity
+        variant: EthereumJSONRPC.Nethermind
       ]
     }
   end
@@ -41,13 +42,13 @@ defmodule Indexer.Fetcher.BlockRewardTest do
     end
 
     test "with consensus block without reward" do
-      %Block{number: block_number} = insert(:block)
+      %Block{number: block_number} = insert(:block, number: 1)
 
       assert [^block_number] = BlockReward.init([], &[&1 | &2], nil)
     end
 
     test "with consensus block with reward" do
-      block = insert(:block)
+      block = insert(:block, number: 1)
       insert(:reward, address_hash: block.miner_hash, block_hash: block.hash)
 
       assert [] = BlockReward.init([], &[&1 | &2], nil)
@@ -64,7 +65,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
     setup %{json_rpc_named_arguments: json_rpc_named_arguments} do
       BlockReward.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
 
-      block = insert(:block)
+      block = insert(:block, number: 1)
 
       %{block: block}
     end
@@ -79,58 +80,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
     } do
       block_quantity = integer_to_quantity(block_number)
 
-      expect(EthereumJSONRPC.Mox, :json_rpc, fn [
-                                                  %{
-                                                    id: id,
-                                                    jsonrpc: "2.0",
-                                                    method: "trace_block",
-                                                    params: [^block_quantity]
-                                                  }
-                                                ],
-                                                _ ->
-        {
-          :ok,
-          [
-            %{
-              id: id,
-              jsonrpc: "2.0",
-              result: [
-                %{
-                  "action" => %{
-                    "author" => to_string(miner_hash),
-                    "rewardType" => "external",
-                    "value" => "0x0"
-                  },
-                  # ... but, switches to non-consensus by the time `trace_block` is called
-                  "blockHash" => to_string(block_hash),
-                  "blockNumber" => block_number,
-                  "result" => nil,
-                  "subtraces" => 0,
-                  "traceAddress" => [],
-                  "transactionHash" => nil,
-                  "transactionPosition" => nil,
-                  "type" => "reward"
-                }
-              ]
-            }
-          ]
-        }
-      end)
-
-      res = eth_block_number_fake_response(block_quantity)
-
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn [
-                                %{
-                                  id: 0,
-                                  jsonrpc: "2.0",
-                                  method: "eth_getBlockByNumber",
-                                  params: [^block_quantity, true]
-                                }
-                              ],
-                              _ ->
-        {:ok, [res]}
-      end)
+      trace_block_expectation(block_quantity, miner_hash, block_hash, block_number, "0x0")
 
       assert count(Chain.Block.Reward) == 0
 
@@ -139,15 +89,15 @@ defmodule Indexer.Fetcher.BlockRewardTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, balance_fields}} ->
+            {:"$gen_call", from, {:buffer, balance_fields, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:balance_fields, balance_fields})
           end
         end)
 
-      Process.register(pid, Indexer.Fetcher.CoinBalance)
+      Process.register(pid, Indexer.Fetcher.CoinBalance.Catchup)
 
-      assert :ok = BlockReward.async_fetch([block_number])
+      assert :ok = BlockReward.async_fetch([block_number], false)
 
       wait_for_tasks(BlockReward)
 
@@ -167,73 +117,22 @@ defmodule Indexer.Fetcher.BlockRewardTest do
 
       block_quantity = integer_to_quantity(block_number)
 
-      expect(EthereumJSONRPC.Mox, :json_rpc, fn [
-                                                  %{
-                                                    id: id,
-                                                    jsonrpc: "2.0",
-                                                    method: "trace_block",
-                                                    params: [^block_quantity]
-                                                  }
-                                                ],
-                                                _ ->
-        {
-          :ok,
-          [
-            %{
-              id: id,
-              jsonrpc: "2.0",
-              result: [
-                %{
-                  "action" => %{
-                    "author" => to_string(miner_hash),
-                    "rewardType" => "external",
-                    "value" => "0x0"
-                  },
-                  # ... but, switches to non-consensus by the time `trace_block` is called
-                  "blockHash" => to_string(block_hash),
-                  "blockNumber" => block_number,
-                  "result" => nil,
-                  "subtraces" => 0,
-                  "traceAddress" => [],
-                  "transactionHash" => nil,
-                  "transactionPosition" => nil,
-                  "type" => "reward"
-                }
-              ]
-            }
-          ]
-        }
-      end)
-
-      res = eth_block_number_fake_response(block_quantity)
-
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn [
-                                %{
-                                  id: 0,
-                                  jsonrpc: "2.0",
-                                  method: "eth_getBlockByNumber",
-                                  params: [^block_quantity, true]
-                                }
-                              ],
-                              _ ->
-        {:ok, [res]}
-      end)
+      trace_block_expectation(block_quantity, miner_hash, block_hash, block_number, "0x0")
 
       parent = self()
 
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, balance_fields}} ->
+            {:"$gen_call", from, {:buffer, balance_fields, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:balance_fields, balance_fields})
           end
         end)
 
-      Process.register(pid, Indexer.Fetcher.CoinBalance)
+      Process.register(pid, Indexer.Fetcher.CoinBalance.Catchup)
 
-      assert :ok = BlockReward.async_fetch([block_number])
+      assert :ok = BlockReward.async_fetch([block_number], false)
 
       wait_for_tasks(BlockReward)
 
@@ -242,51 +141,17 @@ defmodule Indexer.Fetcher.BlockRewardTest do
     end
 
     test "with consensus block does not import if fetch beneficiaries returns a different block hash for block number",
-         %{block: %Block{hash: block_hash, number: block_number, consensus: true, miner_hash: miner_hash}} do
+         %{
+           block: %Block{hash: block_hash, number: block_number, consensus: true, miner_hash: miner_hash}
+         } do
       block_quantity = integer_to_quantity(block_number)
       new_block_hash = block_hash()
 
       refute block_hash == new_block_hash
 
-      expect(EthereumJSONRPC.Mox, :json_rpc, fn [
-                                                  %{
-                                                    id: id,
-                                                    jsonrpc: "2.0",
-                                                    method: "trace_block",
-                                                    params: [^block_quantity]
-                                                  }
-                                                ],
-                                                _ ->
-        {
-          :ok,
-          [
-            %{
-              id: id,
-              jsonrpc: "2.0",
-              result: [
-                %{
-                  "action" => %{
-                    "author" => to_string(miner_hash),
-                    "rewardType" => "external",
-                    "value" => "0x0"
-                  },
-                  # ... but, switches to non-consensus by the time `trace_block` is called
-                  "blockHash" => to_string(new_block_hash),
-                  "blockNumber" => block_number,
-                  "result" => nil,
-                  "subtraces" => 0,
-                  "traceAddress" => [],
-                  "transactionHash" => nil,
-                  "transactionPosition" => nil,
-                  "type" => "reward"
-                }
-              ]
-            }
-          ]
-        }
-      end)
+      trace_block_expectation(block_quantity, miner_hash, new_block_hash, block_number, "0x0")
 
-      assert :ok = BlockReward.async_fetch([block_number])
+      assert :ok = BlockReward.async_fetch([block_number], false)
 
       wait_for_tasks(BlockReward)
 
@@ -296,7 +161,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
 
   describe "run/2" do
     setup do
-      block = insert(:block)
+      block = insert(:block, number: 1)
 
       %{block: block}
     end
@@ -312,58 +177,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
     } do
       block_quantity = integer_to_quantity(block_number)
 
-      expect(EthereumJSONRPC.Mox, :json_rpc, fn [
-                                                  %{
-                                                    id: id,
-                                                    jsonrpc: "2.0",
-                                                    method: "trace_block",
-                                                    params: [^block_quantity]
-                                                  }
-                                                ],
-                                                _ ->
-        {
-          :ok,
-          [
-            %{
-              id: id,
-              jsonrpc: "2.0",
-              result: [
-                %{
-                  "action" => %{
-                    "author" => to_string(miner_hash),
-                    "rewardType" => "external",
-                    "value" => "0x0"
-                  },
-                  # ... but, switches to non-consensus by the time `trace_block` is called
-                  "blockHash" => to_string(block_hash),
-                  "blockNumber" => block_number,
-                  "result" => nil,
-                  "subtraces" => 0,
-                  "traceAddress" => [],
-                  "transactionHash" => nil,
-                  "transactionPosition" => nil,
-                  "type" => "reward"
-                }
-              ]
-            }
-          ]
-        }
-      end)
-
-      res = eth_block_number_fake_response(block_quantity)
-
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn [
-                                %{
-                                  id: 0,
-                                  jsonrpc: "2.0",
-                                  method: "eth_getBlockByNumber",
-                                  params: [^block_quantity, true]
-                                }
-                              ],
-                              _ ->
-        {:ok, [res]}
-      end)
+      trace_block_expectation(block_quantity, miner_hash, block_hash, block_number, "0x0")
 
       assert count(Chain.Block.Reward) == 0
       assert count(Chain.Address.CoinBalance) == 0
@@ -373,13 +187,13 @@ defmodule Indexer.Fetcher.BlockRewardTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, balance_fields}} ->
+            {:"$gen_call", from, {:buffer, balance_fields, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:balance_fields, balance_fields})
           end
         end)
 
-      Process.register(pid, Indexer.Fetcher.CoinBalance)
+      Process.register(pid, Indexer.Fetcher.CoinBalance.Catchup)
 
       assert :ok = BlockReward.run([block_number], json_rpc_named_arguments)
 
@@ -453,21 +267,6 @@ defmodule Indexer.Fetcher.BlockRewardTest do
         }
       end)
 
-      res = eth_block_number_fake_response(block_quantity)
-
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn [
-                                %{
-                                  id: 0,
-                                  jsonrpc: "2.0",
-                                  method: "eth_getBlockByNumber",
-                                  params: [^block_quantity, true]
-                                }
-                              ],
-                              _ ->
-        {:ok, [res]}
-      end)
-
       assert count(Chain.Block.Reward) == 0
       assert count(Chain.Address.CoinBalance) == 0
 
@@ -476,13 +275,13 @@ defmodule Indexer.Fetcher.BlockRewardTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, balance_fields}} ->
+            {:"$gen_call", from, {:buffer, balance_fields, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:balance_fields, balance_fields})
           end
         end)
 
-      Process.register(pid, Indexer.Fetcher.CoinBalance)
+      Process.register(pid, Indexer.Fetcher.CoinBalance.Catchup)
 
       assert :ok = BlockReward.run([block_number], json_rpc_named_arguments)
 
@@ -508,58 +307,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
 
       block_quantity = integer_to_quantity(block_number)
 
-      expect(EthereumJSONRPC.Mox, :json_rpc, fn [
-                                                  %{
-                                                    id: id,
-                                                    jsonrpc: "2.0",
-                                                    method: "trace_block",
-                                                    params: [^block_quantity]
-                                                  }
-                                                ],
-                                                _ ->
-        {
-          :ok,
-          [
-            %{
-              id: id,
-              jsonrpc: "2.0",
-              result: [
-                %{
-                  "action" => %{
-                    "author" => to_string(miner_hash),
-                    "rewardType" => "external",
-                    "value" => "0x1"
-                  },
-                  # ... but, switches to non-consensus by the time `trace_block` is called
-                  "blockHash" => to_string(block_hash),
-                  "blockNumber" => block_number,
-                  "result" => nil,
-                  "subtraces" => 0,
-                  "traceAddress" => [],
-                  "transactionHash" => nil,
-                  "transactionPosition" => nil,
-                  "type" => "reward"
-                }
-              ]
-            }
-          ]
-        }
-      end)
-
-      res = eth_block_number_fake_response(block_quantity)
-
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn [
-                                %{
-                                  id: 0,
-                                  jsonrpc: "2.0",
-                                  method: "eth_getBlockByNumber",
-                                  params: [^block_quantity, true]
-                                }
-                              ],
-                              _ ->
-        {:ok, [res]}
-      end)
+      trace_block_expectation(block_quantity, miner_hash, block_hash, block_number, "0x1")
 
       assert count(Chain.Block.Reward) == 1
       assert count(Chain.Address.CoinBalance) == 1
@@ -573,13 +321,13 @@ defmodule Indexer.Fetcher.BlockRewardTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, balance_fields}} ->
+            {:"$gen_call", from, {:buffer, balance_fields, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:balance_fields, balance_fields})
           end
         end)
 
-      Process.register(pid, Indexer.Fetcher.CoinBalance)
+      Process.register(pid, Indexer.Fetcher.CoinBalance.Catchup)
 
       assert :ok = BlockReward.run([block_number], json_rpc_named_arguments)
 
@@ -602,43 +350,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
 
       refute block_hash == new_block_hash
 
-      expect(EthereumJSONRPC.Mox, :json_rpc, fn [
-                                                  %{
-                                                    id: id,
-                                                    jsonrpc: "2.0",
-                                                    method: "trace_block",
-                                                    params: [^block_quantity]
-                                                  }
-                                                ],
-                                                _ ->
-        {
-          :ok,
-          [
-            %{
-              id: id,
-              jsonrpc: "2.0",
-              result: [
-                %{
-                  "action" => %{
-                    "author" => to_string(miner_hash),
-                    "rewardType" => "external",
-                    "value" => "0x0"
-                  },
-                  # ... but, switches to non-consensus by the time `trace_block` is called
-                  "blockHash" => to_string(new_block_hash),
-                  "blockNumber" => block_number,
-                  "result" => nil,
-                  "subtraces" => 0,
-                  "traceAddress" => [],
-                  "transactionHash" => nil,
-                  "transactionPosition" => nil,
-                  "type" => "reward"
-                }
-              ]
-            }
-          ]
-        }
-      end)
+      trace_block_expectation(block_quantity, miner_hash, new_block_hash, block_number, "0x0")
 
       assert :ok = BlockReward.run([block_number], json_rpc_named_arguments)
 
@@ -656,7 +368,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
       json_rpc_named_arguments: json_rpc_named_arguments
     } do
       block_quantity = integer_to_quantity(block_number)
-      %Block{number: error_block_number} = insert(:block)
+      %Block{number: error_block_number} = insert(:block, number: 2)
 
       error_block_quantity = integer_to_quantity(error_block_number)
 
@@ -700,21 +412,6 @@ defmodule Indexer.Fetcher.BlockRewardTest do
         }
       end)
 
-      res = eth_block_number_fake_response(block_quantity)
-
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn [
-                                %{
-                                  id: 0,
-                                  jsonrpc: "2.0",
-                                  method: "eth_getBlockByNumber",
-                                  params: [^block_quantity, true]
-                                }
-                              ],
-                              _ ->
-        {:ok, [res]}
-      end)
-
       assert count(Chain.Block.Reward) == 0
       assert count(Chain.Address.CoinBalance) == 0
 
@@ -723,13 +420,13 @@ defmodule Indexer.Fetcher.BlockRewardTest do
       pid =
         spawn_link(fn ->
           receive do
-            {:"$gen_call", from, {:buffer, balance_fields}} ->
+            {:"$gen_call", from, {:buffer, balance_fields, _front?}} ->
               GenServer.reply(from, :ok)
               send(parent, {:balance_fields, balance_fields})
           end
         end)
 
-      Process.register(pid, Indexer.Fetcher.CoinBalance)
+      Process.register(pid, Indexer.Fetcher.CoinBalance.Catchup)
 
       assert {:retry, [^error_block_number]} =
                BlockReward.run([block_number, error_block_number], json_rpc_named_arguments)
@@ -748,7 +445,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
 
   defp wait_for_tasks(buffered_task) do
     wait_until(:timer.seconds(10), fn ->
-      counts = BufferedTask.debug_count(buffered_task)
+      counts = BufferedTask.debug_count(buffered_task, false)
       counts.buffer == 0 and counts.tasks == 0
     end)
   end
@@ -762,7 +459,7 @@ defmodule Indexer.Fetcher.BlockRewardTest do
     receive do
       {^ref, :ok} -> :ok
     after
-      timeout -> exit(:timeout)
+      timeout -> :ok
     end
   end
 
@@ -775,39 +472,43 @@ defmodule Indexer.Fetcher.BlockRewardTest do
     end
   end
 
-  defp eth_block_number_fake_response(block_quantity) do
-    %{
-      id: 0,
-      jsonrpc: "2.0",
-      result: %{
-        "author" => "0x0000000000000000000000000000000000000000",
-        "difficulty" => "0x20000",
-        "extraData" => "0x",
-        "gasLimit" => "0x663be0",
-        "gasUsed" => "0x0",
-        "hash" => "0x5b28c1bfd3a15230c9a46b399cd0f9a6920d432e85381cc6a140b06e8410112f",
-        "logsBloom" =>
-          "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-        "miner" => "0x0000000000000000000000000000000000000000",
-        "number" => block_quantity,
-        "parentHash" => "0x0000000000000000000000000000000000000000000000000000000000000000",
-        "receiptsRoot" => "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
-        "sealFields" => [
-          "0x80",
-          "0xb8410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-        ],
-        "sha3Uncles" => "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
-        "signature" =>
-          "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-        "size" => "0x215",
-        "stateRoot" => "0xfad4af258fd11939fae0c6c6eec9d340b1caac0b0196fd9a1bc3f489c5bf00b3",
-        "step" => "0",
-        "timestamp" => "0x0",
-        "totalDifficulty" => "0x20000",
-        "transactions" => [],
-        "transactionsRoot" => "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
-        "uncles" => []
+  defp trace_block_expectation(block_quantity, miner_hash, block_hash, block_number, value) do
+    expect(EthereumJSONRPC.Mox, :json_rpc, fn [
+                                                %{
+                                                  id: id,
+                                                  jsonrpc: "2.0",
+                                                  method: "trace_block",
+                                                  params: [^block_quantity]
+                                                }
+                                              ],
+                                              _ ->
+      {
+        :ok,
+        [
+          %{
+            id: id,
+            jsonrpc: "2.0",
+            result: [
+              %{
+                "action" => %{
+                  "author" => to_string(miner_hash),
+                  "rewardType" => "external",
+                  "value" => value
+                },
+                # ... but, switches to non-consensus by the time `trace_block` is called
+                "blockHash" => to_string(block_hash),
+                "blockNumber" => block_number,
+                "result" => nil,
+                "subtraces" => 0,
+                "traceAddress" => [],
+                "transactionHash" => nil,
+                "transactionPosition" => nil,
+                "type" => "reward"
+              }
+            ]
+          }
+        ]
       }
-    }
+    end)
   end
 end

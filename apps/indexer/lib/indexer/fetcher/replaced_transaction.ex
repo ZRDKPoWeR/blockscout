@@ -1,67 +1,74 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Indexer.Fetcher.ReplacedTransaction do
   @moduledoc """
   Finds and updates replaced transactions.
   """
 
-  use Indexer.Fetcher
+  use Indexer.Fetcher, restart: :permanent
   use Spandex.Decorators
 
   require Logger
 
-  alias Explorer.Chain
-  alias Explorer.Chain.Hash
+  alias Explorer.Chain.{Hash, Transaction}
   alias Indexer.{BufferedTask, Tracer}
   alias Indexer.Fetcher.ReplacedTransaction.Supervisor, as: ReplacedTransactionSupervisor
 
   @behaviour BufferedTask
 
-  @max_batch_size 10
-  @max_concurrency 4
-  @defaults [
-    flush_interval: :timer.seconds(3),
-    max_concurrency: @max_concurrency,
-    max_batch_size: @max_batch_size,
-    task_supervisor: Indexer.Fetcher.ReplacedTransaction.TaskSupervisor,
-    metadata: [fetcher: :replaced_transaction]
-  ]
+  @default_max_batch_size 10
+  @default_max_concurrency 4
 
-  @spec async_fetch([
-          %{
-            required(:nonce) => non_neg_integer,
-            required(:from_address_hash) => Hash.Address.t(),
-            required(:block_hash) => Hash.Full.t()
-          }
-        ]) :: :ok
-  def async_fetch(transactions_fields, timeout \\ 5000) when is_list(transactions_fields) do
+  @spec async_fetch(
+          [
+            %{
+              required(:nonce) => non_neg_integer,
+              required(:from_address_hash) => Hash.Address.t(),
+              required(:block_hash) => Hash.Full.t()
+            }
+          ],
+          boolean()
+        ) :: :ok
+  def async_fetch(transactions_fields, realtime?, timeout \\ 5000) when is_list(transactions_fields) do
     if ReplacedTransactionSupervisor.disabled?() do
       :ok
     else
       entries = Enum.map(transactions_fields, &entry/1)
-      BufferedTask.buffer(__MODULE__, entries, timeout)
+      BufferedTask.buffer(__MODULE__, entries, realtime?, timeout)
     end
   end
 
   @doc false
   def child_spec([init_options, gen_server_options]) do
     merged_init_opts =
-      @defaults
+      defaults()
       |> Keyword.merge(init_options)
       |> Keyword.put(:state, {})
 
     Supervisor.child_spec({BufferedTask, [{__MODULE__, merged_init_opts}, gen_server_options]}, id: __MODULE__)
   end
 
+  defp defaults do
+    [
+      flush_interval: :timer.seconds(3),
+      max_concurrency: Application.get_env(:indexer, __MODULE__)[:concurrency] || @default_max_concurrency,
+      max_batch_size: Application.get_env(:indexer, __MODULE__)[:batch_size] || @default_max_batch_size,
+      task_supervisor: Indexer.Fetcher.ReplacedTransaction.TaskSupervisor,
+      metadata: [fetcher: :replaced_transaction]
+    ]
+  end
+
   @impl BufferedTask
   def init(initial, reducer, _) do
     {:ok, final} =
       [:block_hash, :nonce, :from_address_hash, :hash]
-      |> Chain.stream_pending_transactions(
+      |> Transaction.stream_pending_transactions(
         initial,
         fn transaction_fields, acc ->
           transaction_fields
           |> pending_entry()
           |> reducer.(acc)
-        end
+        end,
+        true
       )
 
     final
@@ -76,7 +83,11 @@ defmodule Indexer.Fetcher.ReplacedTransaction do
     {block_hash_bytes, nonce, from_address_hash_bytes}
   end
 
-  defp pending_entry(%{hash: %Hash{bytes: hash}, nonce: nonce, from_address_hash: %Hash{bytes: from_address_hash_bytes}}) do
+  defp pending_entry(%{
+         hash: %Hash{bytes: hash},
+         nonce: nonce,
+         from_address_hash: %Hash{bytes: from_address_hash_bytes}
+       }) do
     {:pending, nonce, from_address_hash_bytes, hash}
   end
 
@@ -111,11 +122,11 @@ defmodule Indexer.Fetcher.ReplacedTransaction do
 
       pending
       |> Enum.map(&pending_params/1)
-      |> Chain.find_and_update_replaced_transactions()
+      |> Transaction.find_and_update_replaced_transactions()
 
       realtime
       |> Enum.map(&params/1)
-      |> Chain.update_replaced_transactions()
+      |> Transaction.update_replaced_transactions()
 
       :ok
     rescue
@@ -123,7 +134,7 @@ defmodule Indexer.Fetcher.ReplacedTransaction do
         Logger.error(fn ->
           [
             "failed to update replaced transactions for transactions: ",
-            inspect(reason)
+            Exception.format(:error, reason, __STACKTRACE__)
           ]
         end)
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.ViewingChainTest do
   @moduledoc false
 
@@ -7,7 +8,7 @@ defmodule BlockScoutWeb.ViewingChainTest do
 
   alias BlockScoutWeb.{AddressPage, BlockPage, ChainPage, TransactionPage}
   alias Explorer.Chain.Block
-  alias Explorer.Counters.AddressesCounter
+  alias Explorer.Chain.Cache.Counters.AddressesCount
 
   setup do
     Supervisor.terminate_child(Explorer.Supervisor, Explorer.Chain.Cache.Blocks.child_id())
@@ -35,8 +36,8 @@ defmodule BlockScoutWeb.ViewingChainTest do
     test "search for address", %{session: session} do
       address = insert(:address)
 
-      start_supervised!(AddressesCounter)
-      AddressesCounter.consolidate()
+      start_supervised!(AddressesCount)
+      AddressesCount.consolidate()
 
       session
       |> ChainPage.visit_page()
@@ -49,8 +50,8 @@ defmodule BlockScoutWeb.ViewingChainTest do
     test "search for blocks from chain page", %{session: session} do
       block = insert(:block, number: 6)
 
-      start_supervised!(AddressesCounter)
-      AddressesCounter.consolidate()
+      start_supervised!(AddressesCount)
+      AddressesCount.consolidate()
 
       session
       |> ChainPage.visit_page()
@@ -59,8 +60,8 @@ defmodule BlockScoutWeb.ViewingChainTest do
     end
 
     test "blocks list", %{session: session} do
-      start_supervised!(AddressesCounter)
-      AddressesCounter.consolidate()
+      start_supervised!(AddressesCount)
+      AddressesCount.consolidate()
 
       session
       |> ChainPage.visit_page()
@@ -70,8 +71,8 @@ defmodule BlockScoutWeb.ViewingChainTest do
     test "inserts place holder blocks on render for out of order blocks", %{session: session} do
       insert(:block, number: 409)
 
-      start_supervised!(AddressesCounter)
-      AddressesCounter.consolidate()
+      start_supervised!(AddressesCount)
+      AddressesCount.consolidate()
 
       session
       |> ChainPage.visit_page()
@@ -88,8 +89,8 @@ defmodule BlockScoutWeb.ViewingChainTest do
         insert(:transaction)
         |> with_block(block)
 
-      start_supervised!(AddressesCounter)
-      AddressesCounter.consolidate()
+      start_supervised!(AddressesCount)
+      AddressesCount.consolidate()
 
       session
       |> ChainPage.visit_page()
@@ -98,8 +99,8 @@ defmodule BlockScoutWeb.ViewingChainTest do
     end
 
     test "transactions list", %{session: session} do
-      start_supervised!(AddressesCounter)
-      AddressesCounter.consolidate()
+      start_supervised!(AddressesCount)
+      AddressesCount.consolidate()
 
       session
       |> ChainPage.visit_page()
@@ -115,8 +116,8 @@ defmodule BlockScoutWeb.ViewingChainTest do
         |> with_contract_creation(contract_address)
         |> with_block(block)
 
-      start_supervised!(AddressesCounter)
-      AddressesCounter.consolidate()
+      start_supervised!(AddressesCount)
+      AddressesCount.consolidate()
 
       session
       |> ChainPage.visit_page()
@@ -133,17 +134,18 @@ defmodule BlockScoutWeb.ViewingChainTest do
       transaction =
         :transaction
         |> insert(to_address: contract_token_address)
-        |> with_block(block)
+        |> with_block(block, status: :ok)
 
       insert_list(
         3,
         :token_transfer,
         transaction: transaction,
-        token_contract_address: contract_token_address
+        token_contract_address: contract_token_address,
+        block: block
       )
 
-      start_supervised!(AddressesCounter)
-      AddressesCounter.consolidate()
+      start_supervised!(AddressesCount)
+      AddressesCount.consolidate()
 
       ChainPage.visit_page(session)
 

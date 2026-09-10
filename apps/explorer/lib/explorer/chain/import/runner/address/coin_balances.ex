@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Chain.Import.Runner.Address.CoinBalances do
   @moduledoc """
   Bulk imports `t:Explorer.Chain.Address.CoinBalance.t/0`.
@@ -10,6 +11,7 @@ defmodule Explorer.Chain.Import.Runner.Address.CoinBalances do
   alias Ecto.{Changeset, Multi, Repo}
   alias Explorer.Chain.Address.CoinBalance
   alias Explorer.Chain.{Block, Hash, Import, Wei}
+  alias Explorer.Prometheus.Instrumenter
 
   @behaviour Import.Runner
 
@@ -44,7 +46,12 @@ defmodule Explorer.Chain.Import.Runner.Address.CoinBalances do
       |> Map.put(:timestamps, timestamps)
 
     Multi.run(multi, :address_coin_balances, fn repo, _ ->
-      insert(repo, changes_list, insert_options)
+      Instrumenter.block_import_stage_runner(
+        fn -> insert(repo, changes_list, insert_options) end,
+        :address_referencing,
+        :coin_balances,
+        :address_coin_balances
+      )
     end)
   end
 
@@ -72,7 +79,10 @@ defmodule Explorer.Chain.Import.Runner.Address.CoinBalances do
     on_conflict = Map.get_lazy(options, :on_conflict, &default_on_conflict/0)
 
     # Enforce CoinBalance ShareLocks order (see docs: sharelocks.md)
-    ordered_changes_list = Enum.sort_by(changes_list, &{&1.address_hash, &1.block_number})
+    ordered_changes_list =
+      changes_list
+      |> Enum.sort_by(&{&1.address_hash, &1.block_number})
+      |> Enum.dedup()
 
     {:ok, _} =
       Import.insert_changes_list(
@@ -85,7 +95,7 @@ defmodule Explorer.Chain.Import.Runner.Address.CoinBalances do
         timestamps: timestamps
       )
 
-    {:ok, Enum.map(ordered_changes_list, &Map.take(&1, ~w(address_hash block_number)a))}
+    {:ok, Enum.map(ordered_changes_list, &Map.take(&1, ~w(address_hash block_number value)a))}
   end
 
   def default_on_conflict do

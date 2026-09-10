@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Indexer.Memory.Monitor do
   @moduledoc """
   Monitors memory usage of Erlang VM.
@@ -7,20 +8,23 @@ defmodule Indexer.Memory.Monitor do
   `c:Indexer.Memory.Shrinkable.shrink/0`.
   """
 
-  require Bitwise
   require Logger
 
   import Bitwise
   import Indexer.Logger, only: [process: 1]
 
   alias Indexer.Memory.Shrinkable
+  alias Indexer.Prometheus.Instrumenter
 
-  defstruct limit: 1 <<< 30,
+  defstruct limit: 0,
             timer_interval: :timer.minutes(1),
             timer_reference: nil,
-            shrinkable_set: MapSet.new()
+            shrinkable_set: MapSet.new(),
+            shrunk?: false
 
   use GenServer
+
+  @expandable_memory_coefficient 0.4
 
   @doc """
   Registers caller as `Indexer.Memory.Shrinkable`.
@@ -44,7 +48,7 @@ defmodule Indexer.Memory.Monitor do
 
   @impl GenServer
   def init(options) when is_map(options) do
-    state = struct!(__MODULE__, options)
+    %__MODULE__{} = state = struct!(__MODULE__, Map.put_new(options, :limit, define_memory_limit()))
     {:ok, timer_reference} = :timer.send_interval(state.timer_interval, :check)
 
     {:ok, %__MODULE__{state | timer_reference: timer_reference}}
@@ -63,17 +67,95 @@ defmodule Indexer.Memory.Monitor do
   end
 
   @impl GenServer
-  def handle_info(:check, %__MODULE__{limit: limit} = state) do
+  def handle_info(:check, %{limit: limit} = state) do
     total = :erlang.memory(:total)
 
-    if limit < total do
-      log_memory(%{limit: limit, total: total})
-      shrink_or_log(state)
-    end
+    set_metrics(state)
+
+    shrunk_state =
+      if limit < total do
+        log_memory(%{limit: limit, total: total})
+        shrink_or_log(state)
+        %{state | shrunk?: true}
+      else
+        state
+      end
+
+    final_state =
+      if state.shrunk? and total <= limit * @expandable_memory_coefficient do
+        log_expandable_memory(%{limit: limit, total: total})
+        expand(state)
+        %{state | shrunk?: false}
+      else
+        shrunk_state
+      end
 
     flush(:check)
 
-    {:noreply, state}
+    {:noreply, final_state}
+  end
+
+  defp define_memory_limit do
+    case Application.get_env(:indexer, :memory_limit) do
+      integer when is_integer(integer) -> integer
+      _not_set -> memory_limit_from_system()
+    end
+  end
+
+  defp memory_limit_from_system do
+    default_limit = 1 <<< 30
+
+    percentage =
+      case Explorer.mode() do
+        :indexer -> 100
+        _ -> Application.get_env(:indexer, :system_memory_percentage)
+      end
+
+    case total_memory() do
+      nil -> default_limit
+      total_memory -> floor(total_memory * percentage / 100)
+    end
+  end
+
+  @cgroup_memory_limit_paths [
+    # cgroup v2
+    "/sys/fs/cgroup/memory.max",
+    # cgroup v1
+    "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+  ]
+
+  # cgroup v1 reports "no limit" as a huge sentinel number (PAGE_COUNTER_MAX)
+  # rather than a keyword, so values above this threshold are treated as unset
+  @cgroup_no_limit_threshold 1 <<< 60
+
+  # When running in a container, the memory available to the pod is defined by
+  # its cgroup limit, while `:memsup` reports the host's total memory, so the
+  # cgroup limit takes precedence when it is present and set.
+  defp total_memory do
+    cgroup_memory_limit() || :memsup.get_system_memory_data()[:total_memory]
+  end
+
+  defp cgroup_memory_limit do
+    Enum.find_value(@cgroup_memory_limit_paths, &read_cgroup_memory_limit/1)
+  end
+
+  defp read_cgroup_memory_limit(path) do
+    case File.read(path) do
+      {:ok, content} -> parse_cgroup_memory_limit(content)
+      _ -> nil
+    end
+  end
+
+  @doc false
+  def parse_cgroup_memory_limit(content) do
+    with {limit, ""} <- Integer.parse(String.trim(content)),
+         true <- limit > 0 and limit < @cgroup_no_limit_threshold do
+      limit
+    else
+      # content is "max" (cgroup v2 for "no limit"), not a plain positive integer,
+      # or the limit is not set
+      _ -> nil
+    end
   end
 
   defp flush(message) do
@@ -94,14 +176,27 @@ defmodule Indexer.Memory.Monitor do
   end
 
   defp log_memory(%{total: total, limit: limit}) do
-    Logger.warn(fn ->
+    Logger.warning(fn ->
       [
         to_string(total),
         " / ",
         to_string(limit),
         " bytes (",
         to_string(div(100 * total, limit)),
-        "%) of memory limit used."
+        "%) of memory limit used, shrinking queues"
+      ]
+    end)
+  end
+
+  defp log_expandable_memory(%{total: total, limit: limit}) do
+    Logger.info(fn ->
+      [
+        to_string(total),
+        " / ",
+        to_string(limit),
+        " bytes (",
+        to_string(div(100 * total, limit)),
+        "%) of memory limit used, expanding queues"
       ]
     end)
   end
@@ -127,7 +222,7 @@ defmodule Indexer.Memory.Monitor do
   end
 
   defp shrink([{pid, memory} | tail]) do
-    Logger.warn(fn ->
+    Logger.warning(fn ->
       [
         "Worst memory usage (",
         to_string(memory),
@@ -158,10 +253,101 @@ defmodule Indexer.Memory.Monitor do
 
       {:error, :minimum_size} ->
         Logger.error(fn ->
-          [process(pid) | " is at its minimum size and could not shrink."]
+          [process(pid), " is at its minimum size and could not shrink."]
         end)
 
         shrink(tail)
+    end
+  end
+
+  defp expand(%__MODULE__{} = state) do
+    state
+    |> shrinkable_memory_pairs()
+    |> Enum.each(fn {pid, _memory} ->
+      Logger.info(fn -> ["Expanding queue ", process(pid)] end)
+      Shrinkable.expand(pid)
+    end)
+  end
+
+  @megabytes_divisor 2 ** 20
+  defp set_metrics(%__MODULE__{shrinkable_set: shrinkable_set}) do
+    set_all_processes_metrics()
+    set_indexer_fetchers_metrics(shrinkable_set)
+  end
+
+  defp set_all_processes_metrics do
+    total_memory =
+      Enum.reduce(Process.list(), 0, fn pid, acc ->
+        memory = memory(pid)
+        name = name(pid)
+
+        Instrumenter.set_memory_consumed(name, memory / @megabytes_divisor)
+
+        acc + memory
+      end) / @megabytes_divisor
+
+    Instrumenter.set_memory_consumed(:total, total_memory)
+  end
+
+  defp set_indexer_fetchers_metrics(shrinkable_set) do
+    total_memory =
+      Enum.reduce(Enum.to_list(shrinkable_set) ++ on_demand_fetchers(), 0, fn pid, acc ->
+        memory = memory(pid) / @megabytes_divisor
+        name = name(pid)
+
+        Instrumenter.set_memory_consumed_indexer_fetchers(name, memory)
+
+        acc + memory
+      end)
+
+    Instrumenter.set_memory_consumed_indexer_fetchers(:total, total_memory)
+  end
+
+  defp on_demand_fetchers do
+    [Indexer.Application, Indexer.Supervisor, Explorer.Supervisor]
+    |> Enum.reject(&is_nil(Process.whereis(&1)))
+    |> Enum.flat_map(fn supervisor ->
+      supervisor
+      |> safe_which_children()
+      |> Enum.filter(fn {name, _, _, _} -> is_atom(name) and String.contains?(to_string(name), "OnDemand") end)
+      |> Enum.flat_map(fn
+        {_, pid, :supervisor, _} when is_pid(pid) ->
+          pid
+          |> safe_which_children()
+          |> Enum.filter(&(elem(&1, 2) == :worker))
+          |> Enum.map(&elem(&1, 1))
+          |> Enum.filter(&is_pid/1)
+
+        {_, pid, _, _} when is_pid(pid) ->
+          [pid]
+
+        # child is :undefined or :restarting (not currently running)
+        _ ->
+          []
+      end)
+    end)
+  end
+
+  # `Supervisor.which_children/1` performs a `GenServer.call`, which exits with
+  # `:noproc` if the supervisor terminates between the pid check and the call.
+  # Treat that expected race as an empty child list instead of crashing.
+  defp safe_which_children(supervisor) do
+    Supervisor.which_children(supervisor)
+  catch
+    :exit, _ -> []
+  end
+
+  defp name(pid) do
+    case Process.info(pid, :registered_name) do
+      {:registered_name, name} when is_atom(name) ->
+        name
+        |> to_string()
+        |> String.split(".")
+        |> Enum.slice(-2, 2)
+        |> Enum.join(".")
+
+      _ ->
+        nil
     end
   end
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Accounts.User.Authenticate do
   @moduledoc """
   Represents the data required to authenticate a user.
@@ -7,9 +8,9 @@ defmodule Explorer.Accounts.User.Authenticate do
 
   import Ecto.Changeset
 
-  embedded_schema do
-    field(:username, :string)
-    field(:password, :string)
+  typed_embedded_schema do
+    field(:username, :string, null: false)
+    field(:password, :string, null: false)
   end
 
   @required_attrs ~w(password username)a

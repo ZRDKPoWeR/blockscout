@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.ChannelCase do
   @moduledoc """
   This module defines the test case to be used by
@@ -29,9 +30,9 @@ defmodule BlockScoutWeb.ChannelCase do
 
   @dialyzer {:nowarn_function, __ex_unit_setup_0: 1}
   setup tags do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Explorer.Repo)
+    _ = Ecto.Adapters.SQL.Sandbox.checkout(Explorer.Repo)
 
-    unless tags[:async] do
+    if !tags[:async] do
       Ecto.Adapters.SQL.Sandbox.mode(Explorer.Repo, {:shared, self()})
     end
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
   # `async: false` due to use of named GenServer
   use EthereumJSONRPC.Case, async: false
@@ -10,14 +11,16 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
   alias Explorer.Repo
   alias Indexer.BoundInterval
   alias Indexer.Block.Catchup
+  alias Indexer.Block.Catchup.MissingRangesCollector
+  alias Indexer.Fetcher.CoinBalance.Catchup, as: CoinBalanceCatchup
+  alias Indexer.Fetcher.TokenBalance.Current, as: TokenBalanceCurrent
+  alias Indexer.Fetcher.TokenBalance.Historical, as: TokenBalanceHistorical
 
   alias Indexer.Fetcher.{
-    CoinBalance,
     ContractCode,
     InternalTransaction,
     ReplacedTransaction,
     Token,
-    TokenBalance,
     UncleBlock
   }
 
@@ -30,6 +33,13 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
   setup :verify_on_exit!
 
   describe "start_link/1" do
+    setup do
+      initial_env = Application.get_env(:indexer, :block_ranges)
+      on_exit(fn -> Application.put_env(:indexer, :block_ranges, initial_env) end)
+
+      set_celo_core_contracts_env_var()
+    end
+
     # See https://github.com/poanetwork/blockscout/issues/597
     @tag :no_geth
     test "starts fetching blocks from latest and goes down", %{json_rpc_named_arguments: json_rpc_named_arguments} do
@@ -37,44 +47,49 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
 
       if json_rpc_named_arguments[:transport] == EthereumJSONRPC.Mox do
         case Keyword.fetch!(json_rpc_named_arguments, :variant) do
-          EthereumJSONRPC.Parity ->
+          EthereumJSONRPC.Nethermind ->
             block_number = 3_416_888
             block_quantity = integer_to_quantity(block_number)
 
             EthereumJSONRPC.Mox
             |> stub(:json_rpc, fn
               # latest block number to seed starting block number for genesis and realtime tasks
-              %{method: "eth_getBlockByNumber", params: ["latest", false]}, _options ->
+              [%{id: id, method: "eth_getBlockByNumber", params: ["latest", false]}], _options ->
                 {:ok,
-                 %{
-                   "author" => "0xe2ac1c6843a33f81ae4935e5ef1277a392990381",
-                   "difficulty" => "0xfffffffffffffffffffffffffffffffe",
-                   "extraData" => "0xd583010a068650617269747986312e32362e32826c69",
-                   "gasLimit" => "0x7a1200",
-                   "gasUsed" => "0x0",
-                   "hash" => "0x627baabf5a17c0cfc547b6903ac5e19eaa91f30d9141be1034e3768f6adbc94e",
-                   "logsBloom" =>
-                     "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-                   "miner" => "0xe2ac1c6843a33f81ae4935e5ef1277a392990381",
-                   "number" => block_quantity,
-                   "parentHash" => "0x006edcaa1e6fde822908783bc4ef1ad3675532d542fce53537557391cfe34c3c",
-                   "receiptsRoot" => "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
-                   "sealFields" => [
-                     "0x841240b30d",
-                     "0xb84158bc4fa5891934bc94c5dca0301867ce4f35925ef46ea187496162668210bba61b4cda09d7e0dca2f1dd041fad498ced6697aeef72656927f52c55b630f2591c01"
-                   ],
-                   "sha3Uncles" => "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
-                   "signature" =>
-                     "58bc4fa5891934bc94c5dca0301867ce4f35925ef46ea187496162668210bba61b4cda09d7e0dca2f1dd041fad498ced6697aeef72656927f52c55b630f2591c01",
-                   "size" => "0x243",
-                   "stateRoot" => "0x9a8111062667f7b162851a1cbbe8aece5ff12e761b3dcee93b787fcc12548cf7",
-                   "step" => "306230029",
-                   "timestamp" => "0x5b437f41",
-                   "totalDifficulty" => "0x342337ffffffffffffffffffffffffed8d29bb",
-                   "transactions" => [],
-                   "transactionsRoot" => "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
-                   "uncles" => []
-                 }}
+                 [
+                   %{
+                     id: id,
+                     result: %{
+                       "author" => "0xe2ac1c6843a33f81ae4935e5ef1277a392990381",
+                       "difficulty" => "0xfffffffffffffffffffffffffffffffe",
+                       "extraData" => "0xd583010a068650617269747986312e32362e32826c69",
+                       "gasLimit" => "0x7a1200",
+                       "gasUsed" => "0x0",
+                       "hash" => "0x627baabf5a17c0cfc547b6903ac5e19eaa91f30d9141be1034e3768f6adbc94e",
+                       "logsBloom" =>
+                         "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                       "miner" => "0xe2ac1c6843a33f81ae4935e5ef1277a392990381",
+                       "number" => block_quantity,
+                       "parentHash" => "0x006edcaa1e6fde822908783bc4ef1ad3675532d542fce53537557391cfe34c3c",
+                       "receiptsRoot" => "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+                       "sealFields" => [
+                         "0x841240b30d",
+                         "0xb84158bc4fa5891934bc94c5dca0301867ce4f35925ef46ea187496162668210bba61b4cda09d7e0dca2f1dd041fad498ced6697aeef72656927f52c55b630f2591c01"
+                       ],
+                       "sha3Uncles" => "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+                       "signature" =>
+                         "58bc4fa5891934bc94c5dca0301867ce4f35925ef46ea187496162668210bba61b4cda09d7e0dca2f1dd041fad498ced6697aeef72656927f52c55b630f2591c01",
+                       "size" => "0x243",
+                       "stateRoot" => "0x9a8111062667f7b162851a1cbbe8aece5ff12e761b3dcee93b787fcc12548cf7",
+                       "step" => "306230029",
+                       "timestamp" => "0x5b437f41",
+                       "totalDifficulty" => "0x342337ffffffffffffffffffffffffed8d29bb",
+                       "transactions" => [],
+                       "transactionsRoot" => "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+                       "uncles" => []
+                     }
+                   }
+                 ]}
 
               [%{method: "trace_block"} | _] = requests, _options ->
                 {:ok, Enum.map(requests, fn %{id: id} -> %{id: id, result: []} end)}
@@ -207,25 +222,36 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
 
       {:ok, latest_block_number} = EthereumJSONRPC.fetch_block_number_by_tag("latest", json_rpc_named_arguments)
 
-      default_blocks_batch_size = Catchup.Fetcher.default_blocks_batch_size()
+      default_blocks_batch_size = Catchup.Fetcher.blocks_batch_size()
 
       assert latest_block_number > default_blocks_batch_size
 
       assert Repo.aggregate(Block, :count, :hash) == 0
 
-      CoinBalance.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+      first_catchup_block_number = latest_block_number - 1
+      previous_batch_block_number = first_catchup_block_number - default_blocks_batch_size
+
+      Application.put_env(:indexer, :block_ranges, "#{previous_batch_block_number}..#{first_catchup_block_number}")
+      CoinBalanceCatchup.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       InternalTransaction.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       ContractCode.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       Token.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
-      TokenBalance.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+      TokenBalanceHistorical.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+      TokenBalanceCurrent.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       ReplacedTransaction.Supervisor.Case.start_supervised!()
 
       UncleBlock.Supervisor.Case.start_supervised!(
-        block_fetcher: %Indexer.Block.Fetcher{json_rpc_named_arguments: json_rpc_named_arguments}
+        block_fetcher: %Indexer.Block.Fetcher{
+          json_rpc_named_arguments: json_rpc_named_arguments,
+          task_supervisor: Indexer.Block.Catchup.TaskSupervisor
+        }
       )
 
       Catchup.Supervisor.Case.start_supervised!(%{
-        block_fetcher: %Indexer.Block.Fetcher{json_rpc_named_arguments: json_rpc_named_arguments}
+        block_fetcher: %Indexer.Block.Fetcher{
+          json_rpc_named_arguments: json_rpc_named_arguments,
+          task_supervisor: Indexer.Block.Catchup.TaskSupervisor
+        }
       })
 
       first_catchup_block_number = latest_block_number - 1
@@ -235,8 +261,6 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
       end)
 
       assert Repo.aggregate(Block, :count, :hash) >= 1
-
-      previous_batch_block_number = first_catchup_block_number - default_blocks_batch_size
 
       wait_for_results(fn ->
         Repo.one!(from(block in Block, where: block.number == ^previous_batch_block_number))
@@ -375,7 +399,7 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
 
       assert :ok = Supervisor.terminate_child(pid, :task)
 
-      assert_receive {:DOWN, ^reference, :process, ^child_pid, :shutdown}
+      assert_receive {:DOWN, ^reference, :process, ^child_pid, :normal}
     end
 
     test "with other child_id returns {:error, :not_found}", %{pid: pid} do
@@ -401,6 +425,11 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
 
   describe "handle_info(:catchup_index, state)" do
     setup context do
+      initial_env = Application.get_env(:indexer, :block_ranges)
+      on_exit(fn -> Application.put_env(:indexer, :block_ranges, initial_env) end)
+
+      set_celo_core_contracts_env_var()
+
       # force to use `Mox`, so we can manipulate `latest_block_number`
       put_in(context.json_rpc_named_arguments[:transport], EthereumJSONRPC.Mox)
     end
@@ -414,17 +443,17 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
       insert(:block, number: 0)
       insert(:block, number: 1)
 
-      EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn %{method: "eth_getBlockByNumber", params: ["latest", false]}, _options ->
-        {:ok, %{"number" => "0x1"}}
+      stub(EthereumJSONRPC.Mox, :json_rpc, fn _, _ ->
+        {:ok, []}
       end)
 
-      start_supervised!({Task.Supervisor, name: Indexer.Block.Catchup.TaskSupervisor})
-      CoinBalance.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+      MissingRangesCollector.start_link([])
+      CoinBalanceCatchup.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       ContractCode.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       InternalTransaction.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       Token.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
-      TokenBalance.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+      TokenBalanceHistorical.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+      TokenBalanceCurrent.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       ReplacedTransaction.Supervisor.Case.start_supervised!()
 
       # from `setup :state`
@@ -434,7 +463,7 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
               %Catchup.BoundIntervalSupervisor{fetcher: %Catchup.Fetcher{}, task: %Task{pid: pid, ref: ref}} =
                 catchup_index_state} = Catchup.BoundIntervalSupervisor.handle_info(:catchup_index, state)
 
-      assert_receive {^ref, %{first_block_number: 0, missing_block_count: 0}} = message
+      assert_receive {^ref, %{first_block_number: nil, missing_block_count: 0}} = message
 
       Process.sleep(100)
 
@@ -454,9 +483,6 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
       state: state
     } do
       EthereumJSONRPC.Mox
-      |> expect(:json_rpc, fn %{method: "eth_getBlockByNumber", params: ["latest", false]}, _options ->
-        {:ok, %{"number" => "0x1"}}
-      end)
       |> expect(:json_rpc, fn [%{id: id, method: "eth_getBlockByNumber", params: ["0x0", true]}], _options ->
         {:ok,
          [
@@ -492,7 +518,7 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
       end)
       |> (fn mock ->
             case Keyword.fetch!(json_rpc_named_arguments, :variant) do
-              EthereumJSONRPC.Parity ->
+              EthereumJSONRPC.Nethermind ->
                 expect(mock, :json_rpc, fn [%{method: "trace_block"} | _] = requests, _options ->
                   {:ok, Enum.map(requests, fn %{id: id} -> %{id: id, result: []} end)}
                 end)
@@ -512,20 +538,27 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
         {:ok, [%{id: id, jsonrpc: "2.0", result: "0x0"}]}
       end)
 
-      start_supervised({Task.Supervisor, name: Indexer.Block.Catchup.TaskSupervisor})
-      CoinBalance.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+      Application.put_env(:indexer, :block_ranges, "0..0")
+      MissingRangesCollector.start_link([])
+      CoinBalanceCatchup.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       InternalTransaction.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       ContractCode.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       Token.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
-      TokenBalance.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+      TokenBalanceHistorical.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+      TokenBalanceCurrent.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
       ReplacedTransaction.Supervisor.Case.start_supervised!()
 
       UncleBlock.Supervisor.Case.start_supervised!(
-        block_fetcher: %Indexer.Block.Fetcher{json_rpc_named_arguments: json_rpc_named_arguments}
+        block_fetcher: %Indexer.Block.Fetcher{
+          json_rpc_named_arguments: json_rpc_named_arguments,
+          task_supervisor: Indexer.Block.Catchup.TaskSupervisor
+        }
       )
 
       # from `setup :state`
       assert_received :catchup_index
+
+      Process.sleep(50)
 
       assert {:noreply,
               %Catchup.BoundIntervalSupervisor{fetcher: %Catchup.Fetcher{}, task: %Task{pid: pid, ref: ref}} =
@@ -561,9 +594,14 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
   end
 
   defp state(%{json_rpc_named_arguments: json_rpc_named_arguments}) do
+    start_supervised!({Task.Supervisor, name: Indexer.Block.Catchup.TaskSupervisor})
+
     {:ok, state} =
       Catchup.BoundIntervalSupervisor.init(%{
-        block_fetcher: %Indexer.Block.Fetcher{json_rpc_named_arguments: json_rpc_named_arguments}
+        block_fetcher: %Indexer.Block.Fetcher{
+          json_rpc_named_arguments: json_rpc_named_arguments,
+          task_supervisor: Indexer.Block.Catchup.TaskSupervisor
+        }
       })
 
     %{state: state}
@@ -575,9 +613,40 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisorTest do
     pid =
       start_supervised!(
         {Catchup.BoundIntervalSupervisor,
-         [%{block_fetcher: %Indexer.Block.Fetcher{json_rpc_named_arguments: json_rpc_named_arguments}}]}
+         [
+           %{
+             block_fetcher: %Indexer.Block.Fetcher{
+               json_rpc_named_arguments: json_rpc_named_arguments,
+               task_supervisor: Indexer.Block.Catchup.TaskSupervisor
+             }
+           }
+         ]}
       )
 
     {:ok, %{pid: pid}}
+  end
+
+  defp set_celo_core_contracts_env_var do
+    Application.put_env(:explorer, Explorer.Chain.Cache.CeloCoreContracts,
+      contracts: %{
+        "addresses" => %{
+          "Accounts" => [],
+          "Election" => [],
+          "EpochRewards" => [],
+          "FeeHandler" => [],
+          "GasPriceMinimum" => [],
+          "GoldToken" => [],
+          "Governance" => [],
+          "LockedGold" => [],
+          "Reserve" => [],
+          "StableToken" => [],
+          "Validators" => []
+        }
+      }
+    )
+
+    on_exit(fn ->
+      Application.put_env(:explorer, Explorer.Chain.Cache.CeloCoreContracts, contracts: %{})
+    end)
   end
 end

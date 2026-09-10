@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Accounts.User.Registration do
   @moduledoc """
   Represents the data required to register a new account.
@@ -9,13 +10,11 @@ defmodule Explorer.Accounts.User.Registration do
 
   alias Explorer.Accounts.User.Registration
 
-  @type t :: %__MODULE__{}
-
-  embedded_schema do
-    field(:username, :string)
-    field(:email, :string)
-    field(:password, :string)
-    field(:password_confirmation, :string)
+  typed_embedded_schema do
+    field(:username, :string, null: false)
+    field(:email, :string, null: false)
+    field(:password, :string, null: false)
+    field(:password_confirmation, :string, null: false)
   end
 
   @fields ~w(email password password_confirmation username)a

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.Chain.TransactionHistoryChartController do
   use BlockScoutWeb, :controller
 
@@ -5,7 +6,7 @@ defmodule BlockScoutWeb.Chain.TransactionHistoryChartController do
 
   def show(conn, _params) do
     if ajax?(conn) do
-      [{:history_size, history_size}] = Application.get_env(:block_scout_web, __MODULE__, 30)
+      [{:history_size, history_size}] = Application.get_env(:block_scout_web, __MODULE__, [{:history_size, 30}])
 
       today = Date.utc_today()
       latest = Date.add(today, -1)
@@ -15,8 +16,8 @@ defmodule BlockScoutWeb.Chain.TransactionHistoryChartController do
 
       transaction_history_data =
         date_range
-        |> extract_history
-        |> encode_transaction_history_data
+        |> extract_history()
+        |> encode_transaction_history_data()
 
       json(conn, %{
         history_data: transaction_history_data

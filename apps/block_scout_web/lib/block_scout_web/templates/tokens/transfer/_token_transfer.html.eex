@@ -3,14 +3,7 @@
     <!-- Color Block -->
     <div class="tile-transaction-type-block col-md-2 d-flex flex-row flex-md-column">
       <span class="tile-label">
-        <%= cond do %>
-          <% @token_transfer.to_address.hash == @burn_address_hash -> %>
-            <%= gettext("Token Burning") %>
-          <% @token_transfer.from_address.hash == @burn_address_hash -> %>
-            <%= gettext("Token Minting") %>
-          <% true -> %>
-            <%= gettext("Token Transfer") %>
-        <% end %>
+        <%= render(BlockScoutWeb.CommonComponentsView, "_token_transfer_type_display_name.html", type: Chain.get_token_transfer_type(@token_transfer)) %>
       </span>
     </div>
     <!-- Content -->
@@ -22,7 +15,7 @@
                   BlockScoutWeb.AddressView,
                   "_responsive_hash.html",
                   address: @token_transfer.from_address,
-                  contract: BlockScoutWeb.AddressView.contract?(@token_transfer.from_address),
+                  contract: Address.smart_contract?(@token_transfer.from_address),
                   use_custom_tooltip: false
                 ) %>
         <% end %>
@@ -32,7 +25,7 @@
                   BlockScoutWeb.AddressView,
                   "_responsive_hash.html",
                   address: @token_transfer.to_address,
-                  contract: BlockScoutWeb.AddressView.contract?(@token_transfer.to_address),
+                  contract: Address.smart_contract?(@token_transfer.to_address),
                   use_custom_tooltip: false
                 ) %>
         <% end %>
@@ -51,7 +44,7 @@
           to: block_path(BlockScoutWeb.Endpoint, :show, @token_transfer.block_number)
         ) %>
       </span>
-      <span class="mr-2 mr-md-0 order-2" data-from-now="<%= @token_transfer.transaction.block && @token_transfer.transaction.block.timestamp %>"></span>
+      <span class="mr-2 mr-md-0 order-2" data-from-now="<%= BlockScoutWeb.TransactionView.block_timestamp(@token_transfer.transaction) %>"></span>
     </div>
   </div>
 </div>

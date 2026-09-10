@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Chain.Hash.Full do
   @moduledoc """
   A 32-byte [KECCAK-256](https://en.wikipedia.org/wiki/SHA-3) hash.
@@ -90,7 +91,7 @@ defmodule Explorer.Chain.Hash.Full do
       ...> )
       {:ok, <<0x9fc76417374aa880d4449a1f7f31ec597f00b1f6f3dd2d66f4c9c6c445836d8b :: big-integer-size(32)-unit(8)>>}
 
-  If the field from the struct is an incorrect format such as `t:Explorer.Chain.Address.Hash.t/0`, `:error` is returned.
+  If the field from the struct is an incorrect format such as `t:Explorer.Chain.Hash.Address.t/0`, `:error` is returned.
 
       iex> Explorer.Chain.Hash.Full.dump(
       ...>   %Explorer.Chain.Hash{

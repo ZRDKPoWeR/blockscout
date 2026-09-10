@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Indexer.Block.Catchup.Supervisor do
   @moduledoc """
   Supervises `Indexer.Block.Catchup.TaskSupervisor` and `Indexer.Block.Catchup.BoundIntervalSupervisor`
@@ -5,7 +6,7 @@ defmodule Indexer.Block.Catchup.Supervisor do
 
   use Supervisor
 
-  alias Indexer.Block.Catchup.BoundIntervalSupervisor
+  alias Indexer.Block.Catchup.{BoundIntervalSupervisor, MassiveBlocksFetcher, MissingRangesCollector}
 
   def child_spec([init_arguments]) do
     child_spec([init_arguments, []])
@@ -29,8 +30,17 @@ defmodule Indexer.Block.Catchup.Supervisor do
   def init(bound_interval_supervisor_arguments) do
     Supervisor.init(
       [
+        {MissingRangesCollector, []},
         {Task.Supervisor, name: Indexer.Block.Catchup.TaskSupervisor},
-        {BoundIntervalSupervisor, [bound_interval_supervisor_arguments, [name: BoundIntervalSupervisor]]}
+        {MassiveBlocksFetcher,
+         [%{task_supervisor: Indexer.Block.Catchup.TaskSupervisor}, [name: MassiveBlocksFetcher]]},
+        {BoundIntervalSupervisor,
+         [
+           update_in(bound_interval_supervisor_arguments, [:block_fetcher], fn fetcher ->
+             %{fetcher | task_supervisor: Indexer.Block.Catchup.TaskSupervisor}
+           end),
+           [name: BoundIntervalSupervisor]
+         ]}
       ],
       strategy: :one_for_one
     )

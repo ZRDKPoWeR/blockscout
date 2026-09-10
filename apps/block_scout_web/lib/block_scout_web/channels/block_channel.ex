@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.BlockChannel do
   @moduledoc """
   Establishes pub/sub channel for live updates of block events.
@@ -9,11 +10,11 @@ defmodule BlockScoutWeb.BlockChannel do
 
   intercept(["new_block"])
 
-  def join("blocks:new_block", _params, socket) do
+  def join("blocks_old:new_block", _params, socket) do
     {:ok, %{}, socket}
   end
 
-  def join("blocks:" <> _miner_address, _params, socket) do
+  def join("blocks_old:" <> _miner_address, _params, socket) do
     {:ok, %{}, socket}
   end
 
@@ -36,7 +37,8 @@ defmodule BlockScoutWeb.BlockChannel do
       )
 
     push(socket, "new_block", %{
-      average_block_time: Timex.format_duration(average_block_time, Explorer.Counters.AverageBlockTimeDurationFormat),
+      average_block_time:
+        Timex.format_duration(average_block_time, Explorer.Chain.Cache.Counters.Helper.AverageBlockTimeDurationFormat),
       chain_block_html: rendered_chain_block,
       block_html: rendered_block,
       block_number: block.number,

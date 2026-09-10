@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.SocialMedia do
   @moduledoc """
   This module provides social media links
@@ -6,7 +7,7 @@ defmodule BlockScoutWeb.SocialMedia do
   @services %{
     facebook: "https://www.facebook.com/",
     instagram: "https://www.instagram.com/",
-    twitter: "https://www.twitter.com/",
+    twitter: "https://www.x.com/",
     telegram: "https://t.me/"
   }
 

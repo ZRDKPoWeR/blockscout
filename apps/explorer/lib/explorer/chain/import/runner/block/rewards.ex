@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Chain.Import.Runner.Block.Rewards do
   @moduledoc """
   Bulk imports `t:Explorer.Chain.Block.Reward.t/0`.
@@ -8,6 +9,7 @@ defmodule Explorer.Chain.Import.Runner.Block.Rewards do
   alias Ecto.{Changeset, Multi, Repo}
   alias Explorer.Chain.Block.Reward
   alias Explorer.Chain.Import
+  alias Explorer.Prometheus.Instrumenter
 
   @behaviour Import.Runner
 
@@ -37,7 +39,14 @@ defmodule Explorer.Chain.Import.Runner.Block.Rewards do
       |> Map.put_new(:timeout, @timeout)
       |> Map.put(:timestamps, timestamps)
 
-    Multi.run(multi, option_key(), fn repo, _ -> insert(repo, changes_list, insert_options) end)
+    Multi.run(multi, option_key(), fn repo, _ ->
+      Instrumenter.block_import_stage_runner(
+        fn -> insert(repo, changes_list, insert_options) end,
+        :block_following,
+        :rewards,
+        option_key()
+      )
+    end)
   end
 
   @impl Import.Runner

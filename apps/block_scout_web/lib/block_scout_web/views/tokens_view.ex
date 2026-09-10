@@ -1,8 +1,8 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.TokensView do
   use BlockScoutWeb, :view
 
-  alias Explorer.Chain
-  alias Explorer.Chain.Token
+  alias Explorer.Chain.{Address, Token}
 
   def decimals?(%Token{decimals: nil}), do: false
   def decimals?(%Token{decimals: _}), do: true

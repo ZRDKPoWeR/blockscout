@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.AccountsTest do
   use Explorer.DataCase
 
@@ -19,7 +20,7 @@ defmodule Explorer.AccountsTest do
 
       assert user.username == params.username
       refute user.password_hash == params.password
-      assert Comeonin.Bcrypt.checkpw(params.password, user.password_hash)
+      assert Bcrypt.verify_pass(params.password, user.password_hash)
       assert contact.email == params.email
       assert contact.primary
       refute contact.verified

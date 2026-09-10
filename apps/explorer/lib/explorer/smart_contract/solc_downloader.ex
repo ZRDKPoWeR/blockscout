@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.SmartContract.SolcDownloader do
   @moduledoc """
   Checks to see if the requested solc compiler version exists, and if not it
@@ -5,7 +6,8 @@ defmodule Explorer.SmartContract.SolcDownloader do
   """
   use GenServer
 
-  alias Explorer.SmartContract.Solidity.CompilerVersion
+  alias Explorer.HttpClient
+  alias Explorer.SmartContract.CompilerVersion
 
   @latest_compiler_refetch_time :timer.minutes(30)
 
@@ -16,7 +18,7 @@ defmodule Explorer.SmartContract.SolcDownloader do
       path
     else
       compiler_versions =
-        case CompilerVersion.fetch_versions() do
+        case CompilerVersion.fetch_versions(:solc) do
           {:ok, compiler_versions} ->
             compiler_versions
 
@@ -90,10 +92,10 @@ defmodule Explorer.SmartContract.SolcDownloader do
   end
 
   defp download(version) do
-    download_path = "https://solc-bin.ethereum.org/bin/soljson-#{version}.js"
+    download_path = "https://binaries.soliditylang.org/bin/soljson-#{version}.js"
 
     download_path
-    |> HTTPoison.get!([], timeout: 60_000, recv_timeout: 60_000)
+    |> HttpClient.get!([], timeout: 60_000, recv_timeout: 60_000)
     |> Map.get(:body)
   end
 end

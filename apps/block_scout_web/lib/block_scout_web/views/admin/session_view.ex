@@ -1,7 +1,8 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule BlockScoutWeb.Admin.SessionView do
   use BlockScoutWeb, :view
 
-  import BlockScoutWeb.AdminRouter.Helpers
+  import BlockScoutWeb.Routers.AdminRouter.Helpers
 
   alias BlockScoutWeb.FormView
 end

@@ -1,4 +1,5 @@
-use Mix.Config
+# SPDX-License-Identifier: LicenseRef-Blockscout
+import Config
 
 config :explorer,
   json_rpc_named_arguments: [

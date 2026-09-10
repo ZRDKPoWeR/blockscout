@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.GraphQL do
   @moduledoc """
   The GraphQL context.
@@ -11,39 +12,50 @@ defmodule Explorer.GraphQL do
       where: 3
     ]
 
+  alias Explorer.{Chain, Repo}
+
   alias Explorer.Chain.{
     Hash,
     InternalTransaction,
+    Token,
     TokenTransfer,
     Transaction
   }
 
-  alias Explorer.{Chain, Repo}
+  @api_true [api?: true]
 
   @doc """
   Returns a query to fetch transactions with a matching `to_address_hash`,
   `from_address_hash`, or `created_contract_address_hash` field for a given address hash.
 
-  Orders transactions by descending block number and index.
+  Orders transactions by `block_number` and `index` according to `order`
   """
-  @spec address_to_transactions_query(Hash.Address.t()) :: Ecto.Query.t()
-  def address_to_transactions_query(address_hash) do
+  @spec address_to_transactions_query(Hash.Address.t(), :desc | :asc) :: Ecto.Query.t()
+  def address_to_transactions_query(address_hash, order) do
+    dynamic = Transaction.where_transactions_to_from(address_hash)
+
     Transaction
-    |> order_by([transaction], desc: transaction.block_number, desc: transaction.index)
-    |> where([transaction], transaction.to_address_hash == ^address_hash)
-    |> or_where([transaction], transaction.from_address_hash == ^address_hash)
+    |> where([transaction], ^dynamic)
     |> or_where([transaction], transaction.created_contract_address_hash == ^address_hash)
+    |> order_by([transaction], [{^order, transaction.block_number}, {^order, transaction.index}])
   end
 
   @doc """
   Returns an internal transaction for a given transaction hash and index.
   """
   @spec get_internal_transaction(map()) :: {:ok, InternalTransaction.t()} | {:error, String.t()}
-  def get_internal_transaction(%{transaction_hash: _, index: _} = clauses) do
-    if internal_transaction = Repo.get_by(InternalTransaction.where_nonpending_block(), clauses) do
-      {:ok, internal_transaction}
-    else
-      {:error, "Internal transaction not found."}
+  def get_internal_transaction(%{transaction_hash: transaction_hash, index: index}) do
+    InternalTransaction
+    |> InternalTransaction.join_transaction_query()
+    |> where([it], as(:transaction).hash == ^transaction_hash)
+    |> where([it], it.index == ^index)
+    |> InternalTransaction.where_nonpending_operation()
+    |> Repo.replica().one()
+    |> InternalTransaction.preload_transaction(Repo.replica())
+    |> InternalTransaction.preload_addresses([], Repo.replica())
+    |> case do
+      nil -> {:error, "Internal transaction not found."}
+      internal_transaction -> {:ok, internal_transaction}
     end
   end
 
@@ -56,18 +68,12 @@ defmodule Explorer.GraphQL do
   def transaction_to_internal_transactions_query(%Transaction{
         hash: %Hash{byte_count: unquote(Hash.Full.byte_count())} = hash
       }) do
-    query =
-      from(
-        it in InternalTransaction,
-        inner_join: t in assoc(it, :transaction),
-        order_by: [asc: it.index],
-        where: it.transaction_hash == ^hash,
-        select: it
-      )
-
-    query
-    |> InternalTransaction.where_nonpending_block()
-    |> Chain.where_transaction_has_multiple_internal_transactions()
+    InternalTransaction
+    |> InternalTransaction.join_transaction_query()
+    |> where([it], as(:transaction).hash == ^hash)
+    |> order_by([it], it.index)
+    |> InternalTransaction.where_nonpending_operation()
+    |> InternalTransaction.where_is_different_from_parent_transaction()
   end
 
   @doc """
@@ -75,10 +81,35 @@ defmodule Explorer.GraphQL do
   """
   @spec get_token_transfer(map()) :: {:ok, TokenTransfer.t()} | {:error, String.t()}
   def get_token_transfer(%{transaction_hash: _, log_index: _} = clauses) do
-    if token_transfer = Repo.get_by(TokenTransfer, clauses) do
+    if token_transfer = Repo.replica().get_by(TokenTransfer, clauses) do
       {:ok, token_transfer}
     else
       {:error, "Token transfer not found."}
+    end
+  end
+
+  @doc """
+  Returns a token for a given contract address hash.
+  """
+  @spec get_token(map()) :: {:ok, Token.t()} | {:error, String.t()}
+  def get_token(%{contract_address_hash: _} = clauses) do
+    if token = Repo.replica().get_by(Token, clauses) do
+      {:ok, token}
+    else
+      {:error, "Token not found."}
+    end
+  end
+
+  @doc """
+  Returns a transaction for a given hash.
+  """
+  @spec get_transaction_by_hash(Hash.t()) :: {:ok, Transaction.t()} | {:error, String.t()}
+  def get_transaction_by_hash(hash) do
+    hash
+    |> Chain.hash_to_transaction(@api_true)
+    |> case do
+      {:ok, _} = result -> result
+      {:error, :not_found} -> {:error, "Transaction not found."}
     end
   end
 
@@ -93,8 +124,7 @@ defmodule Explorer.GraphQL do
       tt in TokenTransfer,
       inner_join: t in assoc(tt, :transaction),
       where: tt.token_contract_address_hash == ^token_contract_address_hash,
-      order_by: [desc: tt.block_number],
-      select: tt
+      order_by: [desc: tt.block_number, desc: tt.log_index]
     )
   end
 end

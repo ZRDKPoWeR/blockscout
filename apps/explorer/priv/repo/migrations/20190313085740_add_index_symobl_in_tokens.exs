@@ -1,4 +1,5 @@
-defmodule Explorer.Repo.Migrations.AddIndexSymoblInTokens do
+# SPDX-License-Identifier: LicenseRef-Blockscout
+defmodule Explorer.Repo.Migrations.AddIndexSymbolInTokens do
   use Ecto.Migration
 
   def change do

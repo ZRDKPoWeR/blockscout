@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Indexer.Block.Catchup.BoundIntervalSupervisor do
   @moduledoc """
   Supervises the `Indexer.BlockerFetcher.Catchup` with exponential backoff for restarts.
@@ -12,7 +13,7 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisor do
   alias Indexer.Block.Catchup
 
   @type named_arguments :: %{
-          required(:block_fetcher) => Block.Fetcher.t(),
+          required(:block_fetcher) => Block.Fetcher.t(Catchup.Fetcher),
           optional(:block_interval) => pos_integer,
           optional(:memory_monitor) => GenServer.server()
         }
@@ -54,6 +55,7 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisor do
   @impl GenServer
   def init(named_arguments) do
     Logger.metadata(fetcher: :block_catchup)
+    Process.flag(:trap_exit, true)
 
     state = new(named_arguments)
 
@@ -62,12 +64,13 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisor do
     {:ok, state}
   end
 
-  defp new(%{block_fetcher: common_block_fetcher} = named_arguments) do
+  defp new(%{block_fetcher: %Block.Fetcher{} = common_block_fetcher} = named_arguments) do
     block_fetcher = %Block.Fetcher{common_block_fetcher | broadcast: :catchup, callback_module: Catchup.Fetcher}
 
     block_interval = Map.get(named_arguments, :block_interval, @block_interval)
     minimum_interval = div(block_interval, 2)
-    bound_interval = BoundInterval.within(minimum_interval..(minimum_interval * 10))
+    maximum_interval = (minimum_interval + :timer.seconds(1)) * 10
+    bound_interval = BoundInterval.within(minimum_interval..maximum_interval)
 
     %__MODULE__{
       fetcher: %Catchup.Fetcher{block_fetcher: block_fetcher, memory_monitor: Map.get(named_arguments, :memory_monitor)},
@@ -180,7 +183,13 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisor do
   @impl GenServer
   def handle_info(:catchup_index, %__MODULE__{fetcher: %Catchup.Fetcher{} = catchup} = state) do
     {:noreply,
-     %__MODULE__{state | task: Task.Supervisor.async_nolink(Catchup.TaskSupervisor, Catchup.Fetcher, :task, [catchup])}}
+     %__MODULE__{
+       state
+       | task:
+           Task.Supervisor.async_nolink(Catchup.TaskSupervisor, Catchup.Fetcher, :task, [catchup],
+             shutdown: Application.get_env(:indexer, :graceful_shutdown_period)
+           )
+     }}
   end
 
   def handle_info(
@@ -263,8 +272,69 @@ defmodule Indexer.Block.Catchup.BoundIntervalSupervisor do
   end
 
   def handle_info(
+        {ref, {:error, :etimedout}},
+        %__MODULE__{
+          task: %Task{ref: ref}
+        } = state
+      ) do
+    Logger.info("Index had to catch up, but the request is timing out, so retrying immediately.")
+
+    send(self(), :catchup_index)
+
+    {:noreply, %__MODULE__{state | task: nil}}
+  end
+
+  def handle_info(
+        {_ref1, {:error, :enetunreach}},
+        %__MODULE__{
+          task: _
+        } = state
+      ) do
+    Logger.info("Index had to catch up, but the request is timing out, so retrying immediately.")
+
+    send(self(), :catchup_index)
+
+    {:noreply, %__MODULE__{state | task: nil}}
+  end
+
+  def handle_info(
+        {_ref, {:error, :econnrefused}},
+        %__MODULE__{
+          fetcher: %Catchup.Fetcher{
+            block_fetcher: %Block.Fetcher{
+              json_rpc_named_arguments: [
+                transport: _,
+                transport_options: options,
+                variant: _
+              ]
+            }
+          },
+          task: _
+        } = state
+      ) do
+    Logger.error(fn ->
+      "Catchup index stream exited because the archive node endpoint at #{Keyword.get(options, :urls)} is unavailable. Restarting"
+    end)
+
+    send(self(), :catchup_index)
+
+    {:noreply, %__MODULE__{state | task: nil}}
+  end
+
+  def handle_info(
         {:DOWN, ref, :process, pid, reason},
         %__MODULE__{task: %Task{pid: pid, ref: ref}} = state
+      ) do
+    Logger.error(fn -> "Catchup index stream exited with reason (#{inspect(reason)}). Restarting" end)
+
+    send(self(), :catchup_index)
+
+    {:noreply, %__MODULE__{state | task: nil}}
+  end
+
+  def handle_info(
+        {:DOWN, _ref, :process, _pid, reason},
+        %__MODULE__{task: nil} = state
       ) do
     Logger.error(fn -> "Catchup index stream exited with reason (#{inspect(reason)}). Restarting" end)
 

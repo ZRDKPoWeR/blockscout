@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Indexer.Fetcher do
   @moduledoc """
   General fetcher infrastructure.
@@ -22,10 +23,11 @@ defmodule Indexer.Fetcher do
       fetcher = __MODULE__
       supervisor = Keyword.get(opts, :supervisor, Module.concat(fetcher, Supervisor))
       task_supervisor = Keyword.get(opts, :task_supervisor, Module.concat(fetcher, TaskSupervisor))
+      restart = Keyword.get(opts, :restart, :transient)
 
       Module.create(
         supervisor,
-        quote bind_quoted: [strategy: strategy, fetcher: fetcher, task_supervisor: task_supervisor] do
+        quote bind_quoted: [strategy: strategy, fetcher: fetcher, task_supervisor: task_supervisor, restart: restart] do
           use Supervisor
 
           def child_spec([]), do: child_spec([[], []])
@@ -35,7 +37,7 @@ defmodule Indexer.Fetcher do
             default = %{
               id: __MODULE__,
               start: {__MODULE__, :start_link, start_link_arguments},
-              restart: :transient,
+              restart: unquote(restart),
               type: :supervisor
             }
 

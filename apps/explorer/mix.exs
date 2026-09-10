@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Mixfile do
   use Mix.Project
 
@@ -9,22 +10,19 @@ defmodule Explorer.Mixfile do
       config_path: "../../config/config.exs",
       deps: deps(),
       deps_path: "../../deps",
-      description: "Read-access to indexed block chain data.",
+      description: "Read-access to indexed blockchain data.",
       dialyzer: [
-        plt_add_deps: :transitive,
+        plt_add_deps: :app_tree,
         plt_add_apps: ~w(ex_unit mix)a,
-        ignore_warnings: "../../.dialyzer-ignore"
+        ignore_warnings: "../../.dialyzer_ignore.exs"
       ],
-      elixir: "~> 1.10",
+      elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       lockfile: "../../mix.lock",
       package: package(),
-      preferred_cli_env: [
-        credo: :test,
-        dialyzer: :test
-      ],
       start_permanent: Mix.env() == :prod,
-      version: "0.0.1"
+      version: "11.3.0",
+      xref: [exclude: [BlockScoutWeb.Routers.WebRouter.Helpers, Indexer.Helper, Indexer.Fetcher.InternalTransaction]]
     ]
   end
 
@@ -36,6 +34,10 @@ defmodule Explorer.Mixfile do
       mod: {Explorer.Application, []},
       extra_applications: extra_applications()
     ]
+  end
+
+  def cli do
+    [preferred_envs: [credo: :test, dialyzer: :test]]
   end
 
   # Specifies which paths to compile per environment.
@@ -56,18 +58,19 @@ defmodule Explorer.Mixfile do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
-      {:bcrypt_elixir, "~> 1.0"},
+      {:bamboo, "~> 2.5.0"},
+      {:mime, "~> 2.0"},
+      {:bcrypt_elixir, "~> 3.0"},
       # benchmark optimizations
-      {:benchee, "~> 0.13.1", only: :test},
+      {:benchee, "~> 1.5.0", only: :test},
       # CSV output for benchee
-      {:benchee_csv, "~> 0.8.0", only: :test},
-      {:bypass, "~> 1.0", only: :test},
+      {:benchee_csv, "~> 1.0.0", only: :test},
+      {:bypass, "~> 2.1", only: :test},
       {:briefly, "~> 0.4", github: "CargoSense/briefly"},
-      {:comeonin, "~> 4.0"},
-      {:credo, "~> 1.5", only: :test, runtime: false},
+      {:comeonin, "~> 5.3"},
       # For Absinthe to load data in batches
-      {:dataloader, "~> 1.0.0"},
-      {:decimal, "~> 1.0"},
+      {:dataloader, "~> 2.0.0"},
+      {:decimal, "~> 2.0"},
       {:dialyxir, "~> 1.1", only: [:dev, :test], runtime: false},
       # `override: true` for `ex_machina` compatibility
       {:ecto, "~> 3.3", override: true},
@@ -75,40 +78,68 @@ defmodule Explorer.Mixfile do
       {:ecto_sql, "~> 3.3"},
       # JSONRPC access to query smart contracts
       {:ethereum_jsonrpc, in_umbrella: true},
+      {:ex_keccak, "~> 0.7.5"},
       # Data factory for testing
       {:ex_machina, "~> 2.3", only: [:test]},
+      # ZSTD compression/decompression
+      {:ezstd, "~> 1.2"},
       {:exvcr, "~> 0.10", only: :test},
-      {:httpoison, "~> 1.6"},
-      {:jason, "~> 1.0"},
+      {:httpoison, "~> 2.0"},
+      {:jason, "~> 1.3"},
       {:junit_formatter, ">= 0.0.0", only: [:test], runtime: false},
+      {:libcluster, "~> 3.5"},
       # Log errors and application output to separate files
       {:logger_file_backend, "~> 0.0.10"},
-      {:math, "~> 0.3.0"},
+      {:logger_json, "~> 7.0"},
+      {:math, "~> 0.7.0"},
       {:mock, "~> 0.3.0", only: [:test], runtime: false},
-      {:mox, "~> 0.4", only: [:test]},
-      {:poison, "~> 4.0"},
+      {:mox, "~> 1.1.0"},
+      {:poison, "~> 5.0.0"},
       {:nimble_csv, "~> 1.1"},
       {:postgrex, ">= 0.0.0"},
-      # For compatibility with `prometheus_process_collector`, which hasn't been updated yet
-      {:prometheus, "~> 4.0", override: true},
+      {:prometheus, "~> 6.0", override: true},
       # Prometheus metrics for query duration
       {:prometheus_ecto, "~> 1.4.3"},
+      {:prometheus_ex, "~> 5.1.0", override: true},
       # bypass optional dependency
       {:plug_cowboy, "~> 2.2", only: [:dev, :test]},
-      {:que, "~> 0.10.1"},
+      {:que, "~> 0.12.0"},
       {:sobelow, ">= 0.7.0", only: [:dev, :test], runtime: false},
       # Tracing
       {:spandex, "~> 3.0"},
       # `:spandex` integration with Datadog
       {:spandex_datadog, "~> 1.0"},
       # `:spandex` tracing of `:ecto`
-      {:spandex_ecto, "~> 0.6.2"},
+      {:spandex_ecto, "~> 0.7.0"},
       # Attach `:prometheus_ecto` to `:ecto`
-      {:telemetry, "~> 0.4.1"},
-      # `Timex.Duration` for `Explorer.Counters.AverageBlockTime.average_block_time/0`
-      {:timex, "~> 3.6"},
-      {:con_cache, "~> 0.13"},
-      {:tesla, "~> 1.3.3"}
+      {:telemetry, "~> 1.4.1"},
+      # `Timex.Duration` for `Explorer.Chain.Cache.Counters.AverageBlockTime.average_block_time/0`
+      {:timex, "~> 3.7.1"},
+      {:con_cache, "~> 1.0"},
+      {:tesla, "~> 1.21.0"},
+      {:cbor, "~> 1.0"},
+      {:cloak_ecto, "~> 1.3.0"},
+      {:redix, "~> 1.1"},
+      {:hammer_backend_redis, "~> 7.0"},
+      {:typed_ecto_schema, "~> 0.5.0"},
+      {:ueberauth, "~> 0.7"},
+      {:recon, "~> 2.5"},
+      {:varint, "~> 1.4"},
+      {:blake2, "~> 1.0"},
+      {:ueberauth_auth0, "~> 2.0"},
+      {:oauth2, "~> 2.0"},
+      {:siwe, github: "royal-markets/siwe-ex", ref: "51c9c08240eb7eea3c35693011f8d260cd9bb3be"},
+      {:joken, "~> 2.6"},
+      {:joken_jwks, "~> 1.7.0"},
+      {:utils, in_umbrella: true},
+      {:dns, "~> 2.4.0"},
+      {:inet_cidr, "~> 1.0.0"},
+      {:hammer, "~> 7.0"},
+      {:ton, "~> 0.5.0"},
+      {:mint, "~> 1.0"},
+      # pooled HTTP client on top of mint, used for microservice requests
+      {:finch, "~> 0.18"},
+      {:oban, "~> 2.19"}
     ]
   end
 
@@ -134,8 +165,8 @@ defmodule Explorer.Mixfile do
 
   defp package do
     [
-      maintainers: ["POA Networks Ltd."],
-      licenses: ["GPL 3.0"],
+      maintainers: ["Blockscout"],
+      licenses: ["Blockscout Software Licence"],
       links: %{"GitHub" => "https://github.com/blockscout/blockscout"}
     ]
   end

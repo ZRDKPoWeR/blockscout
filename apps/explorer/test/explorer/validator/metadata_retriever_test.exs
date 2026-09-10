@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Validator.MetadataRetrieverTest do
   use EthereumJSONRPC.Case
 
@@ -66,11 +67,6 @@ defmodule Explorer.Validator.MetadataRetrieverTest do
       ]
 
       assert MetadataRetriever.fetch_data() == expected
-    end
-
-    test "raise error when the first contract call fails" do
-      contract_request_with_error()
-      assert_raise(MatchError, fn -> MetadataRetriever.fetch_data() end)
     end
 
     test "raise error when a call to the metadata contract fails" do

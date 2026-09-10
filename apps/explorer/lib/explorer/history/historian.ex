@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.History.Historian do
   @moduledoc """
   Interface for compiling, saving, and fetching historical records.
@@ -7,7 +8,8 @@ defmodule Explorer.History.Historian do
   Record of historical values for a specific date.
   """
   @type record :: %{
-          date: Date.t()
+          required(:date) => Date.t(),
+          optional(atom()) => any()
         }
 
   @doc """

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Indexer.Memory.Shrinkable do
   @moduledoc """
   A process that can shrink its memory usage when asked by `Indexer.Memory.Monitor`.
@@ -21,5 +22,13 @@ defmodule Indexer.Memory.Shrinkable do
   @spec shrunk?(pid()) :: boolean()
   def shrunk?(pid) when is_pid(pid) do
     GenServer.call(pid, :shrunk?)
+  end
+
+  @doc """
+  Asks `pid` to expand its size
+  """
+  @spec expand(pid()) :: :ok
+  def expand(pid) when is_pid(pid) do
+    GenServer.call(pid, :expand)
   end
 end

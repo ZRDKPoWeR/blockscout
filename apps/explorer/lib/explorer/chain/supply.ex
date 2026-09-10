@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Chain.Supply do
   @moduledoc """
   Behaviour for API needed to calculate data related to a chain's supply.
@@ -7,7 +8,7 @@ defmodule Explorer.Chain.Supply do
   """
 
   @doc """
-  The current total number of coins minted minus verifiably burned coins.
+  The current total number of coins minted minus verifiably burnt coins.
   """
   @callback total :: non_neg_integer() | %Decimal{sign: 1}
 

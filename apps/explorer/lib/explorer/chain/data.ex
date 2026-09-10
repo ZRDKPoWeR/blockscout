@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LicenseRef-Blockscout
 defmodule Explorer.Chain.Data do
   @moduledoc """
   The Elixir-native representation of `t:EthereumJSONRPC.data/0`.
@@ -67,6 +68,8 @@ defmodule Explorer.Chain.Data do
     |> to_iodata()
     |> IO.iodata_to_binary()
   end
+
+  def to_string(nil), do: "0x"
 
   @doc """
   Casts `term` to `t:t/0`.
@@ -356,6 +359,32 @@ defmodule Explorer.Chain.Data do
   @impl Ecto.Type
   @spec type() :: :binary
   def type, do: :binary
+
+  @doc """
+    Determines if a data is just an empty binary (0x).
+
+    ## Parameters
+      - `Data.t()`
+
+    ## Returns
+      - `true` if the data is empty (0x)
+      - `false` if data contains bytecode or is not a valid Data struct
+      - `nil` if the data is not a Data struct
+
+    ## Example
+        iex> Explorer.Chain.Data.empty?(%Explorer.Chain.Data{bytes: <<>>})
+        true
+
+        iex> Explorer.Chain.Data.empty?(%Explorer.Chain.Data{bytes: <<1, 2, 3>>})
+        false
+
+        iex> Explorer.Chain.Data.empty?(<<>>)
+        nil
+  """
+  @spec empty?(any()) :: boolean() | nil
+  def empty?(%Data{bytes: <<>>}), do: true
+  def empty?(%Data{bytes: _}), do: false
+  def empty?(_), do: nil
 
   defimpl String.Chars do
     @doc """
